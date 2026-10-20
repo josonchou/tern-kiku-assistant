@@ -1,0 +1,6 @@
+schema = 1
+id = "kiku"
+name = "Kiku Worktrees"
+version = "0.1.0"
+description = "Create Git worktrees with a Lazygit-style flow and open them in Tern tabs."
+window = "window.luau"
