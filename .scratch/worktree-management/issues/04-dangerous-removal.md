@@ -1,6 +1,6 @@
 # 04 危险移除与完整管理验收
 
-Status: ready-for-agent
+Status: claimed
 Type: task
 Blocked by: 02, 03
 Spec: ../spec.md
@@ -36,4 +36,4 @@ Spec: ../spec.md
 
 ## Result
 
-待实施后记录实际集成提交和验收证据。
+按规范记录的用户授权例外领取：03实现已集成，但其验收仍受Tern宿主50ms上限阻塞，03继续保持claimed。本任务先推进实现，不把局部通过或宿主错误当作完整验收通过。
