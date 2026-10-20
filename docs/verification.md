@@ -1,6 +1,6 @@
 # 验证记录
 
-日期：2026-10-20。
+日期：2026-10-21。
 
 ## 环境
 
@@ -13,6 +13,29 @@
 
 **完整验收仍受阻，03和04不得据此标记 resolved。** 用户已明确批准先集成03并推进04；这只改变实施顺序，不降低验收条件。
 
+### 最终审查修复验证
+
+- **Standards**：原1项P2已修复并经原审查者复核；拒绝等待改为可见错误 alert，不依赖完整提示文案，文件、refs、登记、tab／pane、安全状态及流程重入断言未削弱。
+- **Spec**：原1项P2及其遗漏的创建入口已修复并经原审查者复核；管理时核对实际 root 与登记路径，创建后先确认目标本身仍是 Git 根，再发现或复用环境。合法嵌套目标和符号链接父目录仍可正常打开。
+- **删除安全**：独立安全审查未发现达到报告门槛的缺陷。这不替代原生验证。
+
+修复后的局部原生验证全部通过，报告均位于 `/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/` 下：
+
+| 验证范围 | 通过组数 | 报告 |
+| --- | ---: | --- |
+| 创建后身份丢失与合法符号链接父目录 | 4 | `tern-kiku-test-stv7g8p2/report.json` |
+| 完整管理模块，含打开／复用／关闭及身份边界 | 15 | `tern-kiku-test-mr9jal09/report.json` |
+| 完整普通移除模块 | 28 | `tern-kiku-test-7u51xxao/report.json` |
+| 完整危险移除模块 | 19 | `tern-kiku-test-k_8libot/report.json` |
+| 未完成 Git 操作及恢复状态保护 | 9 | `tern-kiku-test-5g0f82_n/report.json` |
+| 真实 Git 部分删除失败及剩余现场保留 | 3 | `tern-kiku-test-rtgbxx9g/report.json` |
+
+每次局部启动均包含2组初始化检查，不能相加为独立用例总数，也不替代完整回归。管理身份先在 `tern-kiku-test-1godi9a9` 取得真实 red：目标 `.git` 丢失后错误列出父环境；创建身份先在 `tern-kiku-test-dwo7d1gj` 取得真实 red：post-checkout hook 移除指针后错误聚焦父环境。两次日志均无50ms超限或插件错误。修正后，目标内容、登记、refs、环境身份及焦点保持断言通过，流程可以重新发起。
+
+原生截图检查补充发现：`tern-kiku-test-rkv7_60f` 的创建失败通知把长路径置前，原因和处理建议被截断。随后只调整创建失败消息的顺序及短提示，并复验创建4组。已查看 `tern-kiku-test-stv7g8p2/shots/serve/management-creation-rejected.png`，已创建／打开失败、Git 身份不符以及核查目标 `.git` 与登记的建议均在首屏完整可见。完整目标路径仍保留在消息中，不宣称长路径也能在首屏完整显示；没有新增交互或自动修复。
+
+### 集成过程验证
+
 - 02集成时，创建、发现/复用打开及安全关闭的完整原生回归通过30组。记录：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-ytvddzqn/report.json`。已查看关闭确认和pane预览截图。
 - 共享Git操作保护加入后，普通移除模块全部原生场景通过28组记录（含加载及原生helpers）：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-y0btow2_/report.json`。包括普通成功/取消、全部文件及索引风险、独立引用保护、确认期间变化、嵌套/失效/替换身份、fsmonitor、floating/parked/native path 使用者和真实Git读取错误后的数据保留与重入。这是模块整组通过，不替代创建/管理全流程回归。
 - 最新完整运行 `PYTHONDONTWRITEBYTECODE=1 python3 tests/integration.py` 在旧创建流程通过12组后，被 `process exceeded 50 ms` 中断，尚未进入新增移除流程。证据：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-evmeqxnq/logs/tern-serve.log:10-11`。
@@ -20,7 +43,7 @@
 - 共享Git操作保护加入后，04危险移除模块通过19组记录（含加载及原生helpers）：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-td1_dmuo/report.json`。覆盖tracked、独立ignored-only、独立无保护Detached、主动路径与外部确认、只读预览不授权、各级取消和错路径改正；200项纯untracked清单下，完整风险项可查看，未展示的新文件使旧授权失效；main/bare/locked/prunable、隐藏索引和最终pane/HEAD/symbolic-ref/路径替换/新增锁定保护均已实际执行。真实staged rename/copy的两条NUL路径都能完整预览，其他checkout与refs保持。长风险预览先在`tern-kiku-test-nriquast`获得真实red，再修正；已查看首屏截断声明截图。此前R/C夹具遍历不存在prunable路径的问题已修正，仍保留全部登记和路径状态断言。
 - 真实Git部分失败烟测先失败再通过，并在当前实现上复验通过3组：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-9hdq8969/report.json`。不可变文件令单次 `--force` 失败，但其他文件及worktree登记已被删除；已查看原生截图，“目录或登记可能已部分移除，请手动核查”完整可见，refs、残留 `.git` 与保护文件均未被进一步清理。最初修正前后证据为`tern-kiku-test-vcpyl6wg`、`tern-kiku-test-o1mahflw`。此烟测使用自建临时文件并在finally清除不可变标志，没有把Git删除顺序或提示文案固化为永久测试。
 
-普通回归过程中修正了测试驱动的确认项漏选和对提示空格的依赖。另一次等待误把`ctl tree`中的常驻`Git  ⌥⌘G`工具栏tooltip当成Git错误，导致夹具过早恢复索引；证据为`tern-kiku-test-tnrhqphq`。现在只匹配实际文本节点且要求picker已关闭，并验证索引字节、refs、登记与流程重入。隔离错误场景`tern-kiku-test-blurbj3d`和上述28组完整普通模块均通过，没有修改生产保护来迎合测试。
+普通回归过程中修正了测试驱动的确认项漏选和对提示空格的依赖。另一次等待误把 `ctl tree` 中的常驻 `Git  ⌥⌘G` 工具栏 tooltip 当成 Git 错误，导致夹具过早恢复索引；证据为 `tern-kiku-test-tnrhqphq`。最终审查后改为匹配 `role="alert"`、`toast`／`err` 类及非零可见矩形，同时要求 picker 已关闭；新操作先清除旧通知，等待新错误期间不执行会清掉通知的 Lua 查询。不再钉完整文案，仍验证索引字节、refs、登记与流程重入；没有修改生产保护来迎合测试。
 
 另外用真实 `git merge --autostash --no-commit --no-ff` 构造已开始但尚未结束的同树合并：工作目录、索引、HEAD和普通refs均保持原审查值，未提交内容只存在于`MERGE_AUTOSTASH`。修正前原生流程仍删除了目标与恢复指针，证据目录 `tern-kiku-test-zwnbo0zh`。共享审查现验证目标private Git目录/backpointer，同时检查目录标记及目标自己的root refs；files/reftable后端的真实Git实验确认二者不能互相替代。新增原生回归通过9组记录：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-wu2fp1g8/report.json`，覆盖两入口初审与末次拒绝、恢复内容保留、其他pending worktree不误阻止安全目标、合法relative backpointer以及普通`MERGE_HEAD`同名分支。相对metadata先在`tern-kiku-test-wsbchvj0`获得真实red；现按private Git目录解析相对路径，并用目录名/root-ref精确识别操作状态，避免`rev-parse MERGE_HEAD`误命中普通分支。根引用查询复用现有命令步骤，不在成功路径拼接整段refs输出作为错误提示。已查看拒绝截图，原因与“先保存内容，再手动完成或中止”的建议可见。
 

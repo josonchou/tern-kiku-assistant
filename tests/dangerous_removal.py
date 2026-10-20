@@ -67,7 +67,7 @@ def run(h):
 
     # Ordinary removal is deliberately not authorized to discard this change.
     _select_remove(h, target)
-    _wait_management_rejection(h, "tracked 或 untracked 修改")
+    _wait_management_rejection(h)
     assert target.is_dir() and target in _registrations(h)
     assert changed.read_text() == "local content explicitly discarded\n"
 
@@ -229,7 +229,7 @@ def run(h):
         }
         ignored_refs = h.git("for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)")
         _select_remove(h, ignored_target)
-        _wait_management_rejection(h, "ignored 文件")
+        _wait_management_rejection(h)
         assert _registrations(h) == ignored_registrations
         assert _checkout_contents(ignored_target) == ignored_contents[ignored_target]
         assert h.git("for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)") == ignored_refs
@@ -294,7 +294,7 @@ def run(h):
     }
     detached_refs = h.git("for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)")
     _select_remove(h, detached_target)
-    _wait_management_rejection(h, "未受本地／远程分支或标签保护")
+    _wait_management_rejection(h)
     assert _registrations(h) == detached_registrations
     assert _checkout_contents(detached_target) == detached_contents[detached_target]
     assert h.git("for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)") == detached_refs
@@ -360,7 +360,7 @@ def run(h):
     many_contents = {path: _checkout_contents(path) for path in many_registrations}
 
     _select_remove(h, many_target)
-    _wait_management_rejection(h, "tracked 或 untracked 修改")
+    _wait_management_rejection(h)
     assert _registrations(h) == many_registrations
     assert {name: (many_target / name).read_bytes() for name in many_files} == many_files
 
@@ -397,7 +397,7 @@ def run(h):
     h.type_text("确认无外部使用并危险移除")
     h.picker(selected="确认无外部使用并危险移除")
     h.ctl("picker enter")
-    _wait_management_rejection(h, "确认期间 worktree、内容、refs 或可见 pane 状态已变化")
+    _wait_management_rejection(h)
     assert many_target.is_dir() and late_file.read_bytes() == b"added after the complete risk preview\n"
     assert {name: (many_target / name).read_bytes() for name in many_files} == many_files
     assert _registrations(h) == many_registrations
@@ -438,7 +438,7 @@ def run(h):
     hard_refs = h.git("for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)")
     hard_registrations = _registrations(h)
     _select_remove(h, repo, action="危险移除 worktree")
-    _wait_management_rejection(h, "主工作树不可移除")
+    _wait_management_rejection(h)
     assert {
         path: content for path, content in _checkout_contents(repo).items()
         if path != ".git" and not path.startswith(".git/")
@@ -454,7 +454,7 @@ def run(h):
     locked_registrations = _registrations(h)
     locked_refs = h.git("for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)")
     _select_remove(h, locked, action="危险移除 worktree")
-    _wait_management_rejection(h, "已锁定")
+    _wait_management_rejection(h)
     assert locked.is_dir() and _checkout_contents(locked) == locked_contents
     assert _registrations(h) == locked_registrations
     assert "locked" in locked_registrations[locked]
@@ -470,7 +470,7 @@ def run(h):
     stale_refs = h.git("for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)")
     assert "prunable" in stale_registrations[stale]
     _select_remove(h, stale, action="危险移除 worktree")
-    _wait_management_rejection(h, "已失效或可清理")
+    _wait_management_rejection(h)
     assert not stale.exists() and stale_moved.is_dir()
     assert _checkout_contents(stale_moved) == stale_contents
     assert _registrations(h) == stale_registrations and "prunable" in _registrations(h)[stale]
@@ -493,7 +493,7 @@ def run(h):
         hidden_registrations = _registrations(h)
         hidden_refs = h.git("for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)")
         _select_remove(h, hidden, action="危险移除 worktree")
-        _wait_management_rejection(h, "隐藏索引标记")
+        _wait_management_rejection(h)
         assert hidden.is_dir() and _checkout_contents(hidden) == hidden_contents
         assert h.git("ls-files", "-v", "--stage", "-z", cwd=hidden) == index_state
         assert _registrations(h) == hidden_registrations
@@ -510,7 +510,7 @@ def run(h):
     bare_refs = h.git("for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)", cwd=bare)
     bare_contents = _checkout_contents(bare)
     _select_remove(h, bare, source=bare_source, action="危险移除 worktree")
-    _wait_management_rejection(h, "Bare repository 不能移除")
+    _wait_management_rejection(h)
     assert bare.is_dir() and bare_source.is_dir()
     assert _checkout_contents(bare) == bare_contents
     assert _registrations_at(h, bare) == bare_registrations
@@ -535,7 +535,7 @@ def run(h):
     h.type_text("确认无外部使用并危险移除")
     h.picker(selected="确认无外部使用并危险移除")
     h.ctl("picker enter")
-    _wait_management_rejection(h, "正在使用目标 worktree")
+    _wait_management_rejection(h)
     assert in_use.is_dir() and subdirectory.is_dir()
     assert h.lua(f"return cx.session:pane({raced_pane}) ~= nil") == "true"
     assert _registrations(h) == in_use_registrations
@@ -563,7 +563,7 @@ def run(h):
     changed_head_registrations = _registrations(h)
     assert h.git("rev-parse", "HEAD", cwd=head_race) == new_head
     _confirm_dangerous(h)
-    _wait_management_rejection(h, "确认期间 worktree、内容、refs 或可见 pane 状态已变化")
+    _wait_management_rejection(h)
     assert head_race.is_dir() and _checkout_contents(head_race) == head_contents
     assert h.git("rev-parse", "refs/heads/" + head_branch) == new_head
     assert _registrations(h) == changed_head_registrations
@@ -590,7 +590,7 @@ def run(h):
     assert "detached" in detached_state_registrations[symbolic_race]
     assert detached_state_registrations[symbolic_race] != symbolic_before_registrations[symbolic_race]
     _confirm_dangerous(h)
-    _wait_management_rejection(h, "确认期间 worktree、内容、refs 或可见 pane 状态已变化")
+    _wait_management_rejection(h)
     assert symbolic_race.is_dir() and _checkout_contents(symbolic_race) == symbolic_contents
     assert h.git("rev-parse", "HEAD", cwd=symbolic_race) == symbolic_head
     detached_symbolic = h.git("symbolic-ref", "--quiet", "HEAD", cwd=symbolic_race, check=False)
@@ -619,7 +619,7 @@ def run(h):
     )
     replacement_config = (replaced / ".git" / "config").read_bytes()
     _confirm_dangerous(h)
-    _wait_management_rejection(h, "实际 root 或 common-dir 与来源仓库不符")
+    _wait_management_rejection(h)
     assert replaced.is_dir() and (replaced / "replacement.txt").read_text() == "replacement identity must remain\n"
     assert h.git("rev-parse", "--show-toplevel", cwd=replaced) == replacement_root
     assert h.git("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=replaced) == replacement_common
@@ -731,7 +731,7 @@ def run(h):
     late_locked_contents = _checkout_contents(late_locked)
     assert "locked " + late_lock_reason in late_locked_registrations[late_locked]
     _confirm_dangerous(h)
-    _wait_management_rejection(h, "已锁定")
+    _wait_management_rejection(h)
     assert late_locked.is_dir() and _checkout_contents(late_locked) == late_locked_contents
     assert _registrations(h) == late_locked_registrations
     assert h.git("for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)") == late_locked_refs
