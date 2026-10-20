@@ -23,7 +23,8 @@
 
 | 验证范围 | 通过组数 | 报告 |
 | --- | ---: | --- |
-| 创建后身份丢失与合法符号链接父目录 | 4 | `tern-kiku-test-stv7g8p2/report.json` |
+| 创建后身份丢失与合法符号链接父目录 | 4 | `tern-kiku-test-gj86r63n/report.json` |
+| 来源会话关闭后的完整路径披露及非 Git 错误恢复 | 4 | `tern-kiku-test-vymxs916/report.json` |
 | 完整管理模块，含打开／复用／关闭及身份边界 | 15 | `tern-kiku-test-mr9jal09/report.json` |
 | 完整普通移除模块 | 28 | `tern-kiku-test-7u51xxao/report.json` |
 | 完整危险移除模块 | 19 | `tern-kiku-test-k_8libot/report.json` |
@@ -32,13 +33,15 @@
 
 每次局部启动均包含2组初始化检查，不能相加为独立用例总数，也不替代完整回归。管理身份先在 `tern-kiku-test-1godi9a9` 取得真实 red：目标 `.git` 丢失后错误列出父环境；创建身份先在 `tern-kiku-test-dwo7d1gj` 取得真实 red：post-checkout hook 移除指针后错误聚焦父环境。两次日志均无50ms超限或插件错误。修正后，目标内容、登记、refs、环境身份及焦点保持断言通过，流程可以重新发起。
 
-原生截图检查补充发现：`tern-kiku-test-rkv7_60f` 的创建失败通知把长路径置前，原因和处理建议被截断。随后只调整创建失败消息的顺序及短提示，并复验创建4组。已查看 `tern-kiku-test-stv7g8p2/shots/serve/management-creation-rejected.png`，已创建／打开失败、Git 身份不符以及核查目标 `.git` 与登记的建议均在首屏完整可见。完整目标路径仍保留在消息中，不宣称长路径也能在首屏完整显示；没有新增交互或自动修复。
+原生截图检查先发现 `tern-kiku-test-rkv7_60f` 的创建失败通知把长路径置前，原因和处理建议被截断。原因前置后，`tern-kiku-test-stv7g8p2` 的身份提示已可见，但集成到 `af57bce` 后的完整回归 `tern-kiku-test-hxn721cx` 通过16组即在既有完整路径断言失败：Tern 实际通知树没有保留换行后的路径；该次日志无50ms超限。
+
+最终将原因中的 CR/LF 合并为空格，把原因与完整目标路径放在同一消息行，不依赖第二行展示；保留原有完整路径、HEAD 和流程重入断言，来源会话关闭及非 Git 目录也改用语义错误状态等待。`tern-kiku-test-vymxs916` 恢复了原路径披露契约，`tern-kiku-test-gj86r63n` 同时验证身份拒绝及合法符号链接创建。已查看两次截图：原因／处理建议可见，完整路径通过原生通知树断言；长路径仍可能视觉省略，不宣称截图首屏完整显示任意路径。Standards 与 Spec 原审查者均已只读复核此限定修复，无残余问题；没有新增交互或自动修复。
 
 ### 集成过程验证
 
 - 02集成时，创建、发现/复用打开及安全关闭的完整原生回归通过30组。记录：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-ytvddzqn/report.json`。已查看关闭确认和pane预览截图。
 - 共享Git操作保护加入后，普通移除模块全部原生场景通过28组记录（含加载及原生helpers）：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-y0btow2_/report.json`。包括普通成功/取消、全部文件及索引风险、独立引用保护、确认期间变化、嵌套/失效/替换身份、fsmonitor、floating/parked/native path 使用者和真实Git读取错误后的数据保留与重入。这是模块整组通过，不替代创建/管理全流程回归。
-- 最新完整运行 `PYTHONDONTWRITEBYTECODE=1 python3 tests/integration.py` 在旧创建流程通过12组后，被 `process exceeded 50 ms` 中断，尚未进入新增移除流程。证据：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-evmeqxnq/logs/tern-serve.log:10-11`。
+- 此前一次完整运行 `PYTHONDONTWRITEBYTECODE=1 python3 tests/integration.py` 在旧创建流程通过12组后，被 `process exceeded 50 ms` 中断，尚未进入新增移除流程。证据：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-evmeqxnq/logs/tern-serve.log:10-11`。
 - 04首个真实 red 精确命中尚缺的危险入口：筛选 `危险移除 worktree` 后picker为0行；该次日志没有宿主超限。证据目录：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-0vgaryo2`。它不是功能通过记录。
 - 共享Git操作保护加入后，04危险移除模块通过19组记录（含加载及原生helpers）：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-td1_dmuo/report.json`。覆盖tracked、独立ignored-only、独立无保护Detached、主动路径与外部确认、只读预览不授权、各级取消和错路径改正；200项纯untracked清单下，完整风险项可查看，未展示的新文件使旧授权失效；main/bare/locked/prunable、隐藏索引和最终pane/HEAD/symbolic-ref/路径替换/新增锁定保护均已实际执行。真实staged rename/copy的两条NUL路径都能完整预览，其他checkout与refs保持。长风险预览先在`tern-kiku-test-nriquast`获得真实red，再修正；已查看首屏截断声明截图。此前R/C夹具遍历不存在prunable路径的问题已修正，仍保留全部登记和路径状态断言。
 - 真实Git部分失败烟测先失败再通过，并在当前实现上复验通过3组：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-9hdq8969/report.json`。不可变文件令单次 `--force` 失败，但其他文件及worktree登记已被删除；已查看原生截图，“目录或登记可能已部分移除，请手动核查”完整可见，refs、残留 `.git` 与保护文件均未被进一步清理。最初修正前后证据为`tern-kiku-test-vcpyl6wg`、`tern-kiku-test-o1mahflw`。此烟测使用自建临时文件并在finally清除不可变标志，没有把Git删除顺序或提示文案固化为永久测试。

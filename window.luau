@@ -81,7 +81,8 @@ end
 local function failOpen(cx, flow, path, message)
     if flow.kind == "create" then
         finish(flow)
-        cx:toast("error", "Worktree 已创建，打开标签页失败", message .. "\n" .. path)
+        local detail = message:gsub("[\r\n]+", " ")
+        cx:toast("error", "Worktree 已创建，打开标签页失败", detail .. " · " .. path)
     else
         fail(cx, flow, message)
     end

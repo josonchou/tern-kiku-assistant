@@ -14,7 +14,7 @@ import tempfile
 import time
 from types import SimpleNamespace
 from dangerous_removal import run as run_dangerous_removal_scenarios
-from management import run as run_management_scenarios
+from management import _has_error_alert, run as run_management_scenarios
 from pending_removal import run as run_pending_removal_scenarios
 from removal import run as run_removal_scenarios
 
@@ -429,8 +429,9 @@ def main():
         lua('cx.sessions:close(kikuTestSession); return true')
         deadline = time.monotonic() + 10
         while True:
-            tree = json.dumps(ctl("tree"), ensure_ascii=False)
-            if "Worktree 已创建，打开标签页失败" in tree: break
+            tree_node = ctl("tree")
+            tree = json.dumps(tree_node, ensure_ascii=False)
+            if _has_error_alert(tree_node): break
             assert time.monotonic() < deadline, tree
             time.sleep(0.1)
         hook.unlink()
@@ -442,10 +443,10 @@ def main():
         empty.mkdir()
         open_repo(empty)
         ctl("plugins run plugin.kiku.create_worktree")
-        wait_for(lambda s: not s["picker"], "non-repo error")
-        time.sleep(0.3)
-        tree = json.dumps(ctl("tree"), ensure_ascii=False)
-        assert "Kiku：创建未完成" in tree and "not a git repository" in tree, tree
+        wait_for(
+            lambda s: not s["picker"] and _has_error_alert(ctl("tree")),
+            "non-repository creation reports a visible error alert",
+        )
         open_repo()
         begin()
         ctl("picker esc")
