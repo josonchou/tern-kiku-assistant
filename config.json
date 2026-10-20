@@ -1,4 +1,5 @@
 {
   "defaultPath": "",
-  "keybinding": "ctrl+b>shift+g"
+  "keybinding": "ctrl+b>shift+g",
+  "manageKeybinding": ""
 }

@@ -1,7 +1,8 @@
 local tern = require("tern")
 local git = require("./lib/worktree")
+local manager = require("./lib/manager")
 
-local config = { defaultPath = "", keybinding = "" }
+local config = { defaultPath = "", keybinding = "", manageKeybinding = "" }
 local configError
 do
     local ok, result = pcall(function()
@@ -10,7 +11,8 @@ do
         local value = tern.json.decode(tern.fs.read(path, 65536))
         assert(type(value) == "table", "config.json 必须是 JSON 对象")
         for key, item in pairs(value) do
-            assert(key == "defaultPath" or key == "keybinding", "未知配置项：" .. tostring(key))
+            assert(key == "defaultPath" or key == "keybinding" or key == "manageKeybinding",
+                "未知配置项：" .. tostring(key))
             assert(type(item) == "string", key .. " 必须是字符串")
             config[key] = item
         end
@@ -21,7 +23,7 @@ end
 
 -- Each window owns one flow. Never retain a WindowCx across asynchronous calls.
 local active
-local chooseMode, chooseLocation, promptPath, promptName, chooseBranch, chooseBase, create
+local chooseMode, chooseLocation, promptPath, promptName, chooseBranch, chooseBase, create, manage
 
 local function finish(flow)
     if active == flow then active = nil end
@@ -29,7 +31,8 @@ end
 
 local function fail(cx, flow, message)
     finish(flow)
-    cx:toast("error", "Kiku：创建未完成", message)
+    local title = flow.kind == "manage" and "Kiku：管理未完成" or "Kiku：创建未完成"
+    cx:toast("error", title, message)
 end
 
 local function guarded(cx, flow, fn)
@@ -75,10 +78,34 @@ local function gitError(result)
     if detail == "" then detail = "Git 退出码：" .. tostring(result.status) end
     return detail:sub(1, 3000)
 end
+local function failOpen(cx, flow, path, message)
+    if flow.kind == "create" then
+        finish(flow)
+        cx:toast("error", "Worktree 已创建，打开标签页失败", path .. "\n" .. message)
+    else
+        fail(cx, flow, message)
+    end
+end
 
 local function readGit(cx, flow, args, callback)
     runGit(cx, flow, args, function(nextCx, result)
         if result.status ~= 0 then fail(nextCx, flow, gitError(result))
+        else callback(nextCx, result.stdout) end
+    end)
+end
+
+local function runGitAt(cx, flow, cwd, args, callback)
+    local argv = { "git", "-C", cwd }
+    for _, arg in ipairs(args) do table.insert(argv, arg) end
+    tern.process.run(argv, { timeout_ms = 120000 }, function(result, nextCx)
+        if not nextCx or active ~= flow then return end
+        guarded(nextCx, flow, function() callback(nextCx, result) end)
+    end)
+end
+
+local function readGitAt(cx, flow, cwd, args, callback)
+    runGitAt(cx, flow, cwd, args, function(nextCx, result)
+        if result.status ~= 0 then failOpen(nextCx, flow, flow.path or cwd, gitError(result))
         else callback(nextCx, result.stdout) end
     end)
 end
@@ -118,24 +145,194 @@ local function recover(cx, flow, message)
     end)
 end
 
-local function openTab(cx, flow)
-    -- A user may switch sessions while Git checks out files. Open in the source
-    -- local session, never in whichever remote session happens to be selected.
-    local ok, err = pcall(function()
-        local found = false
-        for _, session in ipairs(cx.sessions:list()) do
-            if session.id == flow.sessionId then found = true; break end
+local function collectVisiblePanes(cx, callback)
+    local ok, records = pcall(manager.visiblePanes, cx)
+    assert(ok, records)
+    callback(cx, records)
+end
+
+local function worktreeTitle(worktree, flow)
+    if worktree.branch then return worktree.branch:gsub("^refs/heads/", "") end
+    if worktree.detached then
+        local name
+        if flow.kind == "create" then
+            name = flow.name
+        else
+            name = worktree.path:match("([^/]+)$")
         end
-        assert(found, "来源会话已关闭")
+        return name .. " (detached)"
+    end
+    return worktree.path:match("([^/]+)$")
+end
+
+local function focusWorktree(cx, flow, worktree, candidate)
+    local sessionExists = false
+    for _, session in ipairs(cx.sessions:list()) do
+        if session.id == candidate.sessionId and session.host == flow.hostId then
+            sessionExists = true
+            break
+        end
+    end
+    if not sessionExists then fail(cx, flow, "目标标签页所属的本机会话已关闭"); return end
+    cx.sessions:switch(candidate.sessionId)
+    local pane = cx.session:pane(candidate.pane)
+    if not pane or pane.tab ~= candidate.tab or not pane.cwd or pane.cwd == "" then
+        fail(cx, flow, "目标标签页已变化；请重新选择工作树。")
+        return
+    end
+    runGitAt(cx, flow, pane.cwd, { "rev-parse", "--show-toplevel" }, function(rootCx, rootResult)
+        if rootResult.status ~= 0 then
+            fail(rootCx, flow, "目标标签页已不在可识别的 Git 工作树中。")
+            return
+        end
+        local paneRoot = git.chomp(rootResult.stdout)
+        runGitAt(rootCx, flow, pane.cwd, { "rev-parse", "--path-format=absolute", "--git-common-dir" },
+            function(commonCx, commonResult)
+                if commonResult.status ~= 0 or not manager.sameWorktree(
+                    paneRoot, git.chomp(commonResult.stdout), flow.targetRoot, flow.targetCommonDir
+                ) then
+                    fail(commonCx, flow, "目标标签页的 Git 工作树身份已变化；请重新选择。")
+                    return
+                end
+                local ok, err = pcall(function() commonCx.layout:focus(candidate.pane) end)
+                finish(flow)
+                if ok then commonCx:toast("success", "Worktree 已打开", worktree.path)
+                else commonCx:toast("error", "Worktree 已登记，切换标签页失败",
+                    worktree.path .. "\n" .. tostring(err)) end
+            end)
+    end)
+end
+
+local function openInSourceSession(cx, flow, worktree)
+    local ok, err = pcall(function()
+        local sourceSession
+        for _, session in ipairs(cx.sessions:list()) do
+            if session.id == flow.sessionId and session.host == flow.hostId then sourceSession = session; break end
+        end
+        assert(sourceSession, "来源本机会话已关闭")
         cx.sessions:switch(flow.sessionId)
-        assert(cx.hosts:current().kind == "local", "来源会话不是本机会话")
-        local title = flow.mode == "detached" and (flow.name .. " (detached)") or flow.name
-        local tab, launchError = cx.layout:tab({ name = title, launch = { cwd = flow.path } })
+        assert(cx.hosts:current().id == flow.hostId and cx.hosts:current().kind == "local",
+            "来源会话不是原本机环境")
+        local tab, launchError = cx.layout:tab({
+            name = worktreeTitle(worktree, flow),
+            launch = { cwd = worktree.path },
+        })
         assert(tab and not launchError, launchError or "Tern 未返回新标签页")
     end)
     finish(flow)
-    if ok then cx:toast("success", "Worktree 已创建", flow.path)
-    else cx:toast("error", "Worktree 已创建，打开标签页失败", flow.path .. "\n" .. tostring(err)) end
+    if ok then cx:toast("success", "Worktree 已打开", worktree.path)
+    else cx:toast("error", "Worktree 已登记，打开标签页失败", worktree.path .. "\n" .. tostring(err)) end
+end
+
+local function chooseBinding(cx, flow, worktree, candidates)
+    if #candidates == 1 then
+        focusWorktree(cx, flow, worktree, candidates[1])
+    elseif #candidates > 1 then
+        local items = {}
+        for _, candidate in ipairs(candidates) do
+            table.insert(items, {
+                label = tostring(candidate.sessionName or candidate.sessionId) .. " / " .. (candidate.tabName or "标签页")
+                    .. " · tab " .. tostring(candidate.tab),
+                detail = candidate.cwd,
+                candidate = candidate,
+            })
+        end
+        pick(cx, flow, {
+            placeholder = "选择要切换的目标标签页 · " .. worktree.path,
+            items = items,
+        }, function(pickCx, item)
+            focusWorktree(pickCx, flow, worktree, item.candidate)
+        end)
+    else
+        openInSourceSession(cx, flow, worktree)
+    end
+end
+
+local function discoverBindings(cx, flow, worktree, targetRoot, targetCommonDir)
+    collectVisiblePanes(cx, function(nextCx, panes)
+        flow.visiblePanes = panes
+        local gitRoots = {}
+        local function inspect(index, inspectCx)
+            if index > #panes then
+                local candidates = manager.tabCandidates(
+                    panes, targetRoot, targetCommonDir, gitRoots, flow.hostId
+                )
+                chooseBinding(inspectCx, flow, worktree, candidates)
+                return
+            end
+            local pane = panes[index]
+            if pane.hostId ~= flow.hostId or not pane.cwd or pane.cwd == "" then
+                inspect(index + 1, inspectCx)
+                return
+            end
+            runGitAt(inspectCx, flow, pane.cwd, { "rev-parse", "--show-toplevel" }, function(rootCx, rootResult)
+                if rootResult.status ~= 0 then inspect(index + 1, rootCx); return end
+                local paneRoot = git.chomp(rootResult.stdout)
+                runGitAt(rootCx, flow, pane.cwd, { "rev-parse", "--path-format=absolute", "--git-common-dir" },
+                    function(commonCx, commonResult)
+                        if commonResult.status == 0 then
+                            gitRoots[pane.pane] = {
+                                root = paneRoot,
+                                commonDir = git.chomp(commonResult.stdout),
+                            }
+                        end
+                        inspect(index + 1, commonCx)
+                    end)
+            end)
+        end
+        inspect(1, nextCx)
+    end)
+end
+
+local function openWorktree(cx, flow, worktree)
+    if worktree.bare then fail(cx, flow, "Bare repository 没有可打开的工作目录：" .. worktree.path); return end
+    readGitAt(cx, flow, worktree.path, { "rev-parse", "--show-toplevel" }, function(rootCx, root)
+        local targetRoot = git.chomp(root)
+        readGitAt(rootCx, flow, worktree.path,
+            { "rev-parse", "--path-format=absolute", "--git-common-dir" }, function(commonCx, common)
+                local targetCommonDir = git.chomp(common)
+                if targetCommonDir ~= flow.commonDir then
+                    failOpen(commonCx, flow, worktree.path, "目标工作树属于其他 Git 仓库。")
+                    return
+                end
+                local sourceFound = false
+                for _, session in ipairs(commonCx.sessions:list()) do
+                    if session.id == flow.sessionId and session.host == flow.hostId then
+                        sourceFound = true
+                        break
+                    end
+                end
+                if not sourceFound then
+                    failOpen(commonCx, flow, worktree.path, "来源本机会话已关闭。")
+                    return
+                end
+                flow.targetRoot, flow.targetCommonDir = targetRoot, targetCommonDir
+                discoverBindings(commonCx, flow, worktree, targetRoot, targetCommonDir)
+            end)
+    end)
+end
+
+local function openTab(cx, flow)
+    readGitAt(cx, flow, flow.path, { "rev-parse", "--show-toplevel" }, function(rootCx, root)
+        local targetRoot = git.chomp(root)
+        readGitAt(rootCx, flow, flow.path,
+            { "rev-parse", "--path-format=absolute", "--git-common-dir" }, function(commonCx, common)
+                local targetCommonDir = git.chomp(common)
+                if targetCommonDir ~= flow.commonDir then
+                    failOpen(commonCx, flow, flow.path, "创建结果属于其他 Git 仓库。")
+                    return
+                end
+                readWorktrees(commonCx, flow, function(listCx)
+                    for _, worktree in ipairs(flow.worktrees) do
+                        if worktree.path == targetRoot then
+                            openWorktree(listCx, flow, worktree)
+                            return
+                        end
+                    end
+                    failOpen(listCx, flow, flow.path, "Git 未登记刚创建的工作树。")
+                end)
+            end)
+    end)
 end
 
 create = function(cx, flow, path)
@@ -303,12 +500,13 @@ chooseMode = function(cx, flow)
 end
 
 local function start(cx)
-    if active then cx:toast("info", "Kiku 创建流程正在进行", "请完成或按 Esc 取消当前选择。 "); return end
+    if active then cx:toast("info", "Kiku 工作树流程正在进行", "请完成或按 Esc 取消当前选择。 "); return end
     if configError then cx:toast("error", "Kiku 配置错误", configError); return end
     if tern.runtime.os ~= "macos" and tern.runtime.os ~= "linux" then
         cx:toast("error", "Kiku 首版支持 macOS / Linux 本机仓库"); return
     end
-    if cx.hosts:current().kind ~= "local" then
+    local host = cx.hosts:current()
+    if host.kind ~= "local" then
         cx:toast("error", "Kiku 首版仅支持本机仓库", "请切换到本机终端后使用。 "); return
     end
     local focused = cx.session:focused()
@@ -316,19 +514,105 @@ local function start(cx)
     if not pane or not pane.cwd or pane.cwd == "" then
         cx:toast("error", "无法确定当前项目目录", "请聚焦已报告工作目录的终端。 "); return
     end
-    local flow = { cwd = pane.cwd, sessionId = cx.sessions:current().id }
+    local flow = {
+        kind = "create", cwd = pane.cwd, sessionId = cx.sessions:current().id,
+        hostId = host.id,
+    }
     active = flow
     guarded(cx, flow, function()
         readGit(cx, flow, { "rev-parse", "--show-toplevel" }, function(rootCx, root)
             flow.root = git.chomp(root)
-            readGit(rootCx, flow, { "rev-parse", "--verify", "HEAD^{commit}" }, function(headCx, head)
-                flow.head = git.chomp(head)
-                runGit(headCx, flow, { "symbolic-ref", "--quiet", "--short", "HEAD" }, function(branchCx, result)
-                    if result.status ~= 0 and result.status ~= 1 then fail(branchCx, flow, gitError(result)); return end
-                    flow.sourceBranch = result.status == 0 and git.chomp(result.stdout) or "HEAD"
-                    chooseMode(branchCx, flow)
+            readGit(rootCx, flow, { "rev-parse", "--path-format=absolute", "--git-common-dir" },
+                function(commonCx, common)
+                    flow.commonDir = git.chomp(common)
+                    readGit(commonCx, flow, { "rev-parse", "--verify", "HEAD^{commit}" }, function(headCx, head)
+                        flow.head = git.chomp(head)
+                        runGit(headCx, flow, { "symbolic-ref", "--quiet", "--short", "HEAD" },
+                            function(branchCx, result)
+                                if result.status ~= 0 and result.status ~= 1 then fail(branchCx, flow, gitError(result)); return end
+                                flow.sourceBranch = result.status == 0 and git.chomp(result.stdout) or "HEAD"
+                                chooseMode(branchCx, flow)
+                            end)
+                    end)
                 end)
-            end)
+        end)
+    end)
+end
+
+manage = function(cx)
+    if active then cx:toast("info", "Kiku 工作树流程正在进行", "请完成或按 Esc 取消当前选择。 "); return end
+    if configError then cx:toast("error", "Kiku 配置错误", configError); return end
+    if tern.runtime.os ~= "macos" and tern.runtime.os ~= "linux" then
+        cx:toast("error", "Kiku 首版支持 macOS / Linux 本机仓库"); return
+    end
+    local host = cx.hosts:current()
+    if host.kind ~= "local" then
+        cx:toast("error", "Kiku 首版仅支持本机仓库", "请切换到本机终端后使用。 "); return
+    end
+    local focused = cx.session:focused()
+    local pane = focused and cx.session:pane(focused)
+    if not pane or not pane.cwd or pane.cwd == "" then
+        cx:toast("error", "无法确定当前项目目录", "请聚焦已报告工作目录的终端。 "); return
+    end
+    local flow = {
+        kind = "manage", cwd = pane.cwd, sessionId = cx.sessions:current().id,
+        hostId = host.id,
+    }
+    active = flow
+    guarded(cx, flow, function()
+        readGit(cx, flow, { "rev-parse", "--show-toplevel" }, function(rootCx, root)
+            flow.root = git.chomp(root)
+            readGit(rootCx, flow, { "rev-parse", "--path-format=absolute", "--git-common-dir" },
+                function(commonCx, common)
+                    flow.commonDir = git.chomp(common)
+                    readWorktrees(commonCx, flow, function(listCx)
+                        local items = {}
+                        for _, worktree in ipairs(flow.worktrees) do
+                            local name
+                            if worktree.branch then
+                                name = worktree.branch:gsub("^refs/heads/", "")
+                            elseif worktree.detached then
+                                name = "Detached"
+                            else
+                                name = "Bare"
+                            end
+                            local head = worktree.head
+                            if not head then head = "no HEAD" end
+                            local detail = name .. " · " .. head
+                            table.insert(items, {
+                                label = manager.worktreeLabel(worktree),
+                                detail = detail,
+                                worktree = worktree,
+                            })
+                        end
+                        if #items == 0 then
+                            fail(listCx, flow, "当前仓库没有 Git 登记的工作树。")
+                            return
+                        end
+                        pick(listCx, flow, {
+                            placeholder = "选择 Git worktree · 输入筛选路径",
+                            items = items,
+                        }, function(selectCx, item)
+                            flow.selectedWorktree = item.worktree
+                            pick(selectCx, flow, {
+                                placeholder = "选择操作 · " .. item.worktree.path,
+                                items = { { label = "打开／切换", id = "open" } },
+                            }, function(actionCx)
+                                readWorktrees(actionCx, flow, function(refreshCx)
+                                    local current
+                                    for _, worktree in ipairs(flow.worktrees) do
+                                        if worktree.path == flow.selectedWorktree.path then current = worktree; break end
+                                    end
+                                    if not current then
+                                        fail(refreshCx, flow, "所选工作树已不在 Git 登记列表中。")
+                                        return
+                                    end
+                                    openWorktree(refreshCx, flow, current)
+                                end)
+                            end)
+                        end)
+                    end)
+                end)
         end)
     end)
 end
@@ -337,4 +621,8 @@ local defaultKey = "ctrl+b>shift+g"
 tern.command({
     id = "create_worktree", title = "Kiku: 新建 Git worktree", group = "Kiku Worktrees",
     keys = { config.keybinding ~= "" and config.keybinding or defaultKey }, run = start,
+})
+tern.command({
+    id = "manage_worktrees", title = "Kiku: 管理 Git worktree", group = "Kiku Worktrees",
+    keys = config.manageKeybinding ~= "" and { config.manageKeybinding } or {}, run = manage,
 })

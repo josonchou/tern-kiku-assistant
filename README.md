@@ -1,8 +1,8 @@
 # Tern Kiku Plugin
 
-在当前 Git 项目中，通过 Tern 原生选择框快速创建 worktree，并在新标签页打开。
+在当前 Git 项目中，通过 Tern 原生选择框创建、发现并打开 Git worktree。
 
-默认快捷键：先按 **Ctrl+B**，松开后再按 **Shift+G**（大写 G）。也可以在命令面板搜索 **Kiku: 新建 Git worktree**。
+默认创建快捷键：先按 **Ctrl+B**，松开后再按 **Shift+G**（大写 G）。也可以在命令面板搜索 **Kiku: 新建 Git worktree** 或 **Kiku: 管理 Git worktree**。
 
 ## 安装
 
@@ -32,6 +32,10 @@ tern plugin link ~/Workspace/tern-kiku-plugin
 
 原目录的未提交修改留在原处；新目录使用已提交内容。插件不自动 fetch，不复制 `.env`，不安装依赖，也不执行额外初始化脚本。Git 自身配置的 hooks、过滤器仍按 Git 正常行为运行。
 
+### 管理已有 worktree
+
+从本机仓库内的命令面板运行 **Kiku: 管理 Git worktree**，或配置独立的 `manageKeybinding` 快捷键。选择当前仓库中 Git 登记的 worktree 后，再选择 **打开／切换**。列表包括 Git 或其他工具直接创建的 worktree；插件根据 Git 仓库身份和本机 pane cwd 发现有效标签页，优先复用，若有多个匹配项则让你选择，没有时才新建命名标签页。管理流程不修改 Git 工作树。
+
 ## 与 lazygit 对齐的目录规则
 
 对齐版本：lazygit **0.65.1**，源码固定在 commit `17cb09fa7b08bc96d9f0e81b91f4720fc1a36700`。
@@ -59,12 +63,14 @@ tern plugin link ~/Workspace/tern-kiku-plugin
 ```json
 {
   "defaultPath": "../app-worktrees",
-  "keybinding": "ctrl+b>shift+g"
+  "keybinding": "ctrl+b>shift+g",
+  "manageKeybinding": ""
 }
 ```
 
 - `defaultPath`：额外的默认父目录。空字符串表示只参考已有工作树，没有时回退到主仓库上一级目录。
-- `keybinding`：可配置快捷键。`>` 分隔先后按下的组合键，`+` 表示同时按下。例如 `ctrl+b>shift+g` 是先 Ctrl+B，再 Shift+G；也可改为单个组合键，如 `cmd+alt+shift+w`。空字符串回退到 `ctrl+b>shift+g`。
+- `keybinding`：创建 worktree 的快捷键。`>` 分隔先后按下的组合键，`+` 表示同时按下；空字符串回退到 `ctrl+b>shift+g`。
+- `manageKeybinding`：管理 worktree 的独立快捷键，格式相同；空字符串表示不绑定，仍可从命令面板运行。
 
 修改后在 Tern 命令面板执行 **Reload plugins**。Tern 用户 `keybinds` 可以绑定动作 `plugin.kiku.create_worktree`；用户设置优先于插件快捷键。如果插件快捷键与 Tern 内置键位冲突，Tern 会忽略该绑定，命令面板入口仍可使用。macOS 的 `cmd+alt+w` 已用于关闭标签页。
 
@@ -104,8 +110,9 @@ python3 tests/integration.py
 
 ```text
 plugin.toml          # 插件清单
-window.luau          # 原生交互、异步 Git 操作、打开新标签页
-lib/worktree.luau    # 路径、Git 输出解析和参数构造
+window.luau          # 原生创建／管理流程、异步 Git 操作及工作树标签页绑定
+lib/worktree.luau    # Git porcelain 解析、路径和创建参数
+lib/manager.luau     # 本机跨会话 pane 与工作树身份匹配
 config.json          # 用户可编辑配置
 tests/               # Luau 断言及真实 Tern/Git 集成测试
 GLOSSARY.md          # 已确认的领域术语
