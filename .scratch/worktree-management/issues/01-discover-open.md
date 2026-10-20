@@ -1,6 +1,6 @@
 # 01 发现并复用打开工作树
 
-Status: claimed
+Status: resolved
 Type: task
 Blocked by: none
 Spec: ../spec.md
@@ -36,4 +36,9 @@ Spec: ../spec.md
 
 ## Result
 
-待实施后记录实际集成提交和验收证据。
+- 实现提交：`97a2116ba7e78567467c56f4ce4725405851bc58`。
+- 集成提交：`32fa9c1edaec20b29beaf2f2a841c4036b96b0c4`，分支 `integration/worktree-management`。
+- 初始 red：真实管理调用因尚无管理选择框而超时，记录在 `/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-a4l0_bxm/`。
+- Green：完整真实 Tern/Git 回归 27 组通过；覆盖全部原创建路径、外部发现、复用、多候选、跨会话、子目录和符号链接、取消与独立快捷键。报告：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-rbinn655/report.json`。
+- 删除仅验证 argv 转发、字段复制和文案复制的断言后，在隔离 Tern 原生运行时重新执行了 29 条行为／边界断言，全部通过。
+- 真实探针修正了两个身份假设：SDK 已一次枚举全部会话，必须按 `TabInfo.session` 关联；Git 对 symlink 父目录的创建目标使用 canonical 登记路径。发现过程不再切换会话。

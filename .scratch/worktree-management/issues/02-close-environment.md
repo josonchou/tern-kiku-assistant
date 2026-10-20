@@ -1,6 +1,6 @@
 # 02 安全关闭工作环境
 
-Status: ready-for-agent
+Status: claimed
 Type: task
 Blocked by: 01
 Spec: ../spec.md
