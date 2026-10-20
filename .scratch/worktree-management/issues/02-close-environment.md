@@ -1,6 +1,6 @@
 # 02 安全关闭工作环境
 
-Status: claimed
+Status: resolved
 Type: task
 Blocked by: 01
 Spec: ../spec.md
@@ -34,4 +34,9 @@ Spec: ../spec.md
 
 ## Result
 
-待实施后记录实际集成提交和验收证据。
+- 实现提交：`c92800a33d24119dc9ce512fbdda472284ac1238`。
+- 集成合并：`1cf5026186c896c1422ac26e6266f71670de3f4e`，分支 `integration/worktree-management`。
+- 真实 red：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-hykgeuu4/`，关闭动作缺失。
+- 真实 green：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-ytvddzqn/report.json`，30 组集成场景通过。
+- 覆盖无绑定拒绝、未保存文件、锁定会话、忙碌终端、未知原生面板、干净 Notebook、浮动 pane、预览期间新增 pane、确认期间启动命令、取消，以及关闭后复用剩余环境；其他 tabs/panes/sessions、文件字节、refs 和 worktree 登记均按场景核验保留。
+- 原生截图位于同一报告目录的 `shots/serve/management-close-confirm.png` 与 `management-close-pane.png`；主线程已检查确认列表和单行可滚动信息预览。

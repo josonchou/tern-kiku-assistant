@@ -1,6 +1,6 @@
 # 03 正常移除与风险审查
 
-Status: ready-for-agent
+Status: claimed
 Type: task
 Blocked by: 01
 Spec: ../spec.md
