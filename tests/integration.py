@@ -12,6 +12,8 @@ import shutil
 import subprocess
 import tempfile
 import time
+from types import SimpleNamespace
+from management import run as run_management_scenarios
 
 PROJECT = Path(__file__).resolve().parents[1]
 ROOT = Path(tempfile.mkdtemp(prefix="tern-kiku-test-")).resolve()
@@ -71,12 +73,12 @@ def replace_text(value):
 
 
 def lua(code):
-    ctl("carly lua " + code)
+    ctl("carly lua " + json.dumps(code, ensure_ascii=False))
     result = state()["carly"]["last_tool"]
     assert result and not result.get("error"), result
     ctl("carly close")
-    return result["text"]
-
+    text = result["text"]
+    return text.removeprefix("→ ").strip()
 
 def open_repo(path=REPO):
     lua("return cx.layout:new_tab({cwd=" + json.dumps(str(path), ensure_ascii=False) + "})")
@@ -171,12 +173,19 @@ def main():
         ctl("plugins fixtures")
         action = lua('return cx.actions:describe("plugin.kiku.create_worktree")')
         assert "available = true" in action and "kiku" in action, action
+        management_action = lua('return cx.actions:describe("plugin.kiku.manage_worktrees")')
+        assert "available = true" in management_action, management_action
         record("plugin load and shortcut registration")
         core = json.dumps(str(PLUGIN / "lib" / "worktree.luau"))
+        manager_path = json.dumps(str(PLUGIN / "lib" / "manager.luau"))
         tests = json.dumps(str(PLUGIN / "tests" / "helpers.luau"))
-        result = lua(f'local m = loadstring(tern.fs.read({core}))(); return loadstring(tern.fs.read({tests}))()(m)')
-        assert "24" in result, result
-        record("24 Luau helper assertions in native runtime")
+        helper_code = (
+            f'local m = loadstring(tern.fs.read({core}))()'
+            f'; local manager = loadstring(tern.fs.read({manager_path}))()'
+            f'; return loadstring(tern.fs.read({tests}))()(m, manager)'
+        )
+        lua(helper_code)
+        record("Luau Git and worktree manager helpers in native runtime")
         open_repo()
         begin(shortcut=True)
         replace_text("../bad")
@@ -439,6 +448,12 @@ def main():
         ctl("picker esc")
         wait_for(lambda s: not s["picker"], "custom shortcut cancel")
         record("custom key sequence from config triggers the command")
+        harness = SimpleNamespace(
+            repo=REPO, plugin=PLUGIN, root=ROOT, git=git, ctl=ctl, picker=picker,
+            type_text=type_text, replace_text=replace_text, begin=begin, name=name,
+            created=created, state=state, wait_for=wait_for, lua=lua, open_repo=open_repo, record=record,
+        )
+        run_management_scenarios(harness)
 
         (PLUGIN / "config.json").write_text(json.dumps({"defaultPath": "", "keybinding": ""}))
         ctl("plugins fixtures")

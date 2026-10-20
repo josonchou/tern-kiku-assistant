@@ -49,12 +49,20 @@ function M.worktrees(output)
             row = { path = field:sub(10) }
             table.insert(rows, row)
         elseif row then
-            if field:sub(1, 7) == "branch " then
+            if field:sub(1, 5) == "HEAD " then
+                row.head = field:sub(6)
+            elseif field:sub(1, 7) == "branch " then
                 row.branch = field:sub(8)
             elseif field == "bare" then
                 row.bare = true
             elseif field == "detached" then
                 row.detached = true
+            elseif field == "locked" or field:sub(1, 7) == "locked " then
+                row.locked = true
+                row.lockReason = field:sub(8)
+            elseif field == "prunable" or field:sub(1, 9) == "prunable " then
+                row.prunable = true
+                row.prunableReason = field:sub(10)
             end
         end
     end

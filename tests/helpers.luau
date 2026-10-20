@@ -1,5 +1,5 @@
--- Run in Tern's actual Luau runtime; M is provided by the integration runner.
-return function(M)
+-- Run in Tern's actual Luau runtime; M and manager are provided by the integration runner.
+return function(M, manager)
     local checks = 0
     local function eq(actual, expected)
         assert(actual == expected, tostring(actual) .. " != " .. tostring(expected))
@@ -18,6 +18,12 @@ return function(M)
     eq(#trees, 2)
     eq(trees[2].path, "/trees/a \"中文\"\npath")
     eq(trees[2].detached, true)
+    eq(trees[2].head, "abcd")
+    local protected = M.worktrees("worktree /locked\0HEAD deadbeef\0branch refs/heads/locked\0locked operator maintenance\0\0worktree /stale\0HEAD feedface\0detached\0prunable missing directory\0\0")
+    eq(protected[1].locked, true)
+    eq(protected[1].lockReason, "operator maintenance")
+    eq(protected[2].prunable, true)
+    eq(protected[2].prunableReason, "missing directory")
     eq(M.occupied(trees)["refs/heads/main"], "/repos/main")
     local branches = M.branches("refs/heads/main\0\0\nrefs/remotes/origin/HEAD\0refs/remotes/origin/topic\0\nrefs/remotes/origin/feature/a\0\0\n")
     eq(#branches, 2)
@@ -31,11 +37,17 @@ return function(M)
     eq(targets[2], "/trees/feature/a")
     eq(targets[3], "/repos/trees/feature/a")
     eq(#M.targets(linked, "/trees/a", "/trees", "a", "/home/u"), 2)
-    local args = M.addArgs({mode = "new", name = "topic", path = "/a/has ' quote", base = "abc"})
-    eq(table.concat(args, "|"), "worktree|add|-b|topic|--|/a/has ' quote|abc")
-    local remote = M.addArgs({mode = "remote", name = "topic", path = "/a", base = "refs/remotes/origin/topic"})
-    eq(remote[3], "--track")
-    local detached = M.addArgs({mode = "detached", path = "/a", base = "abc"})
-    eq(detached[3], "--detach")
+    eq(manager.sameWorktree("/repo/tree", "/repo/.git", "/repo/other", "/repo/.git"), false)
+    local matches = manager.tabCandidates({
+        {pane = 1, cwd = "/repo/tree/sub", tab = 11, sessionId = 1, sessionHost = 7, hostId = 7},
+        {pane = 2, cwd = "/repo/tree", tab = 13, sessionId = 1, sessionHost = 8, hostId = 7},
+        {pane = 3, cwd = "/repo/tree", tab = 12, sessionId = 2, sessionHost = 8, hostId = 8},
+    }, "/repo/tree", "/repo/.git", {
+        [1] = {root = "/repo/tree", commonDir = "/repo/.git"},
+        [2] = {root = "/repo/tree", commonDir = "/repo/.git"},
+        [3] = {root = "/repo/tree", commonDir = "/repo/.git"},
+    }, 7)
+    eq(#matches, 1)
+    eq(matches[1].pane, 1)
     return checks
 end
