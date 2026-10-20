@@ -80,6 +80,13 @@ def lua(code):
     text = result["text"]
     return text.removeprefix("→ ").strip()
 
+
+def lua_json(expression):
+    output = ROOT / "lua-query.json"
+    lua(f"tern.fs.write({json.dumps(str(output))}, tern.json.encode({expression})); return true")
+    return json.loads(output.read_text())
+
+
 def open_repo(path=REPO):
     lua("return cx.layout:new_tab({cwd=" + json.dumps(str(path), ensure_ascii=False) + "})")
     ctl("ready")
@@ -451,7 +458,8 @@ def main():
         harness = SimpleNamespace(
             repo=REPO, plugin=PLUGIN, root=ROOT, git=git, ctl=ctl, picker=picker,
             type_text=type_text, replace_text=replace_text, begin=begin, name=name,
-            created=created, state=state, wait_for=wait_for, lua=lua, open_repo=open_repo, record=record,
+            created=created, state=state, wait_for=wait_for, lua=lua, lua_json=lua_json,
+            open_repo=open_repo, record=record,
         )
         run_management_scenarios(harness)
 

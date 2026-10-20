@@ -1,6 +1,6 @@
 # Tern Kiku Plugin
 
-在当前 Git 项目中，通过 Tern 原生选择框创建、发现并打开 Git worktree。
+通过 Tern 原生选择框创建与管理 Git worktree，并安全关闭对应的标签页工作环境。
 
 默认创建快捷键：先按 **Ctrl+B**，松开后再按 **Shift+G**（大写 G）。也可以在命令面板搜索 **Kiku: 新建 Git worktree** 或 **Kiku: 管理 Git worktree**。
 
@@ -34,7 +34,13 @@ tern plugin link ~/Workspace/tern-kiku-plugin
 
 ### 管理已有 worktree
 
-从本机仓库内的命令面板运行 **Kiku: 管理 Git worktree**，或配置独立的 `manageKeybinding` 快捷键。选择当前仓库中 Git 登记的 worktree 后，再选择 **打开／切换**。列表包括 Git 或其他工具直接创建的 worktree；插件根据 Git 仓库身份和本机 pane cwd 发现有效标签页，优先复用，若有多个匹配项则让你选择，没有时才新建命名标签页。管理流程不修改 Git 工作树。
+从本机仓库内的命令面板运行 **Kiku: 管理 Git worktree**，或配置独立的 `manageKeybinding` 快捷键。选择当前仓库中 Git 登记的 worktree 后，可选择 **打开／切换** 或 **关闭工作环境**。列表包括 Git 或其他工具直接创建的 worktree；插件根据 Git 仓库身份和本机 pane cwd 发现有效标签页，优先复用，若有多个匹配项则让你选择，没有时才在打开操作中创建命名标签页；关闭时没有有效绑定则拒绝，不会新建标签页。
+
+关闭只作用于选定的绑定标签页，并检查其中全部 tiled／floating pane。终端和 agent 必须明确空闲；锁定的会话、未保存文件、运行或排队的 Notebook、无法确认安全状态的工具都会被拒绝。Database 等没有充分可核验运行状态的原生面板需要手动关闭。
+
+确认列表默认选取消，明确显示目标 session／tab ID，并逐项列出将关闭的 pane。选择“查看 pane”可检查完整位置信息；预览里的输入不会修改文件或关闭对象，回车返回原确认列表，Esc 取消整个关闭流程。最终确认后重新检查环境身份、pane 集合和安全状态；预览期间的变化不会被返回操作重新认可。
+
+关闭不移除 worktree、目录或分支，不提供强制关闭。预期的安全拒绝直接显示原因及手动处理建议；部分关闭失败时报告已关闭的 pane 并停止，不继续扩大操作范围。
 
 ## 与 lazygit 对齐的目录规则
 

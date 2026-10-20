@@ -21,7 +21,6 @@ do
     if not ok then configError = tostring(result) end
 end
 
--- Each window owns one flow. Never retain a WindowCx across asynchronous calls.
 local active
 local chooseMode, chooseLocation, promptPath, promptName, chooseBranch, chooseBase, create, manage
 
@@ -225,24 +224,133 @@ local function openInSourceSession(cx, flow, worktree)
 end
 
 local function chooseBinding(cx, flow, worktree, candidates)
+    local function choose(candidate, choiceCx)
+        if flow.action ~= "close" then
+            focusWorktree(choiceCx, flow, worktree, candidate)
+            return
+        end
+        local ok, snapshot = pcall(manager.closeSnapshot, choiceCx, candidate, flow.hostId)
+        if not ok then fail(choiceCx, flow, tostring(snapshot)); return end
+        local function showConfirmation(confirmCx)
+            local items = {
+                { label = "取消", id = "cancel" },
+                {
+                    label = "确认关闭 · session " .. tostring(snapshot.session)
+                        .. " · tab " .. tostring(snapshot.tab),
+                    id = "confirm",
+                },
+            }
+            for _, pane in ipairs(snapshot.panes) do
+                local layout = pane.floating and "floating" or "tiled"
+                table.insert(items, {
+                    label = "查看 pane " .. tostring(pane.pane) .. " · " .. tostring(pane.kind)
+                        .. " · " .. layout,
+                    detail = pane.path or pane.cwd or "位置未知",
+                    id = "pane",
+                    pane = pane,
+                })
+            end
+            pick(confirmCx, flow, {
+                placeholder = "检查目标环境 · " .. worktree.path,
+                items = items,
+            }, function(itemCx, item)
+                if item.id == "cancel" then
+                    finish(flow)
+                    return
+                end
+                if item.id == "pane" then
+                    local pane = item.pane
+                    local location = pane.path or pane.cwd or "位置未知"
+                    local information = table.concat({
+                        "位置: " .. tostring(location),
+                        "session: " .. tostring(snapshot.session),
+                        "tab: " .. tostring(snapshot.tab),
+                        "pane: " .. tostring(pane.pane),
+                        "类型: " .. tostring(pane.kind),
+                        "布局: " .. (pane.floating and "floating" or "tiled"),
+                    }, " · ")
+                    prompt(itemCx, flow, {
+                        placeholder = "仅查看；回车返回确认，Esc取消关闭",
+                        value = information,
+                        action = "返回确认（仅查看）",
+                    }, function(previewCx, _value)
+                        showConfirmation(previewCx)
+                    end)
+                    return
+                end
+                if item.id ~= "confirm" then
+                    finish(flow)
+                    return
+                end
+                local currentOk, current = pcall(manager.closeSnapshot, itemCx, candidate, flow.hostId)
+                if not currentOk or not manager.sameCloseSnapshot(snapshot, current) then
+                    fail(itemCx, flow, currentOk
+                        and "确认期间工作环境或 pane 状态已变化；未关闭任何 pane，请重新检查。"
+                        or tostring(current))
+                    return
+                end
+                readWorktrees(itemCx, flow, function(listCx)
+                    local registered
+                    for _, itemWorktree in ipairs(flow.worktrees) do
+                        if itemWorktree.path == worktree.path then registered = itemWorktree; break end
+                    end
+                    if not registered or registered.head ~= worktree.head or registered.branch ~= worktree.branch
+                        or registered.detached ~= worktree.detached or registered.bare ~= worktree.bare
+                        or registered.locked ~= worktree.locked or registered.prunable ~= worktree.prunable then
+                        fail(listCx, flow, "确认期间目标 worktree 登记、身份或保护状态已变化；未关闭环境。")
+                        return
+                    end
+                    readGitAt(listCx, flow, candidate.cwd, { "rev-parse", "--show-toplevel" },
+                        function(rootCx, root)
+                            readGitAt(rootCx, flow, candidate.cwd,
+                                { "rev-parse", "--path-format=absolute", "--git-common-dir" },
+                                function(commonCx, common)
+                                    if not manager.sameWorktree(
+                                        git.chomp(root), git.chomp(common), flow.targetRoot, flow.targetCommonDir
+                                    ) or git.chomp(root) ~= worktree.path then
+                                        fail(commonCx, flow, "确认期间目标 Git 身份已变化；未关闭环境。")
+                                        return
+                                    end
+                                    local finalOk, final = pcall(manager.closeSnapshot,
+                                        commonCx, candidate, flow.hostId)
+                                    if not finalOk or not manager.sameCloseSnapshot(snapshot, final) then
+                                        fail(commonCx, flow, finalOk
+                                            and "执行前 pane 集合或安全状态已变化；未关闭任何 pane，请重新检查。"
+                                            or tostring(final))
+                                        return
+                                    end
+                                    local closeOk, closeErr = pcall(manager.closeEnvironment, commonCx, final)
+                                    finish(flow)
+                                    if closeOk then
+                                        commonCx:toast("success", "工作环境已关闭", worktree.path)
+                                    else
+                                        commonCx:toast("error", "工作环境部分关闭", tostring(closeErr))
+                                    end
+                                end)
+                        end)
+                end)
+            end)
+        end
+        showConfirmation(choiceCx)
+    end
     if #candidates == 1 then
-        focusWorktree(cx, flow, worktree, candidates[1])
+        choose(candidates[1], cx)
     elseif #candidates > 1 then
         local items = {}
         for _, candidate in ipairs(candidates) do
             table.insert(items, {
-                label = tostring(candidate.sessionName or candidate.sessionId) .. " / " .. (candidate.tabName or "标签页")
-                    .. " · tab " .. tostring(candidate.tab),
+                label = tostring(candidate.sessionName or candidate.sessionId) .. " / "
+                    .. (candidate.tabName or "标签页") .. " · tab " .. tostring(candidate.tab),
                 detail = candidate.cwd,
                 candidate = candidate,
             })
         end
         pick(cx, flow, {
-            placeholder = "选择要切换的目标标签页 · " .. worktree.path,
+            placeholder = "选择要操作的目标标签页 · " .. worktree.path,
             items = items,
-        }, function(pickCx, item)
-            focusWorktree(pickCx, flow, worktree, item.candidate)
-        end)
+        }, function(pickCx, item) choose(item.candidate, pickCx) end)
+    elseif flow.action == "close" then
+        fail(cx, flow, "没有可安全识别的绑定标签页；未创建标签页，也未关闭环境。")
     else
         openInSourceSession(cx, flow, worktree)
     end
@@ -596,15 +704,25 @@ manage = function(cx)
                             flow.selectedWorktree = item.worktree
                             pick(selectCx, flow, {
                                 placeholder = "选择操作 · " .. item.worktree.path,
-                                items = { { label = "打开／切换", id = "open" } },
-                            }, function(actionCx)
+                                items = {
+                                    { label = "打开／切换", id = "open" },
+                                    { label = "关闭工作环境", id = "close" },
+                                },
+                            }, function(actionCx, action)
+                                flow.action = action.id
                                 readWorktrees(actionCx, flow, function(refreshCx)
                                     local current
                                     for _, worktree in ipairs(flow.worktrees) do
-                                        if worktree.path == flow.selectedWorktree.path then current = worktree; break end
+                                        if worktree.path == flow.selectedWorktree.path then
+                                            current = worktree
+                                            break
+                                        end
                                     end
-                                    if not current then
-                                        fail(refreshCx, flow, "所选工作树已不在 Git 登记列表中。")
+                                    local selected = flow.selectedWorktree
+                                    if not current or current.head ~= selected.head
+                                        or current.branch ~= selected.branch or current.detached ~= selected.detached
+                                        or current.bare ~= selected.bare then
+                                        fail(refreshCx, flow, "所选工作树登记或身份已变化；请重新选择。")
                                         return
                                     end
                                     openWorktree(refreshCx, flow, current)
