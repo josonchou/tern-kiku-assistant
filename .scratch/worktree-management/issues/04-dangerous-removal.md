@@ -1,6 +1,6 @@
 # 04 危险移除与完整管理验收
 
-Status: claimed
+Status: resolved
 Type: task
 Blocked by: 02, 03
 Spec: ../spec.md
@@ -36,11 +36,12 @@ Spec: ../spec.md
 
 ## Result
 
-按规范记录的用户授权例外领取：03实现已集成，但其验收仍受Tern宿主50ms上限阻塞，03继续保持claimed。本任务先推进实现，不把局部通过或宿主错误当作完整验收通过。
+领取时按规范记录的用户授权例外推进：当时03已集成但完整验收受 Tern 50ms 上限阻塞，03仍保持 claimed。后续完成集中审查修复与完整真实回归后，才解决03及本任务，未以局部通过代替完整验收。
 
-危险入口、风险预览、空输入完整路径授权、独立外部确认、单次force及末次共享安全复查已实现。正常与危险入口均保留未完成Git操作的恢复信息；Git失败不声称事务回滚。
+实现提交 `5462e3dd61a3a6e831aed2d88e405a5dc97474b9` 已通过 `53147a5f7c64616fb2e770f8e80c5573998a0c6c` 集成。危险入口、风险预览、空输入完整路径授权、独立外部确认、单次 force 及末次共享安全复查均已完成；两种移除均保留未完成 Git 操作的恢复信息，Git 失败不声称事务回滚。
 
-- 危险模块全部原生场景通过19组记录（含加载和helpers），证据目录 `tern-kiku-test-td1_dmuo`。包含独立ignored-only/Detached、长风险清单、真实rename/copy双路径、取消和错路径、硬保护及最终确认期间状态变化。
-- 共享Git操作保护与合法metadata/同名分支兼容性通过9组，证据目录 `tern-kiku-test-wu2fp1g8`；普通模块回归通过28组，证据目录 `tern-kiku-test-y0btow2_`。
-- 真实Git部分失败烟测通过3组，证据目录 `tern-kiku-test-9hdq8969`；已查看实际提示截图，“可能已部分移除”与“请手动核查”可见，剩余文件、Git指针和refs未被进一步清理。
-- 最终集成审查和当前创建/管理完整回归尚待完成，维持claimed。详细验证与宿主限制见 `docs/verification.md`。
+- 最终审查修复后的危险模块通过19组记录（含加载和helpers），证据目录 `tern-kiku-test-k_8libot`。包含独立 ignored-only／Detached、长风险清单、真实 rename／copy 双路径、取消和错路径、硬保护及最终确认期间状态变化。
+- 共享 Git 操作保护与合法 metadata／同名分支兼容性通过9组，证据目录 `tern-kiku-test-5g0f82_n`；普通模块通过28组，证据目录 `tern-kiku-test-7u51xxao`。
+- 真实 Git 部分失败烟测通过3组，证据目录 `tern-kiku-test-rtgbxx9g`；实际观察到部分删除后剩余文件、Git 指针和 refs 未被进一步清理，错误反馈不承诺回滚。
+- 最终验收代码 `964ec9c7e7b3af23eec691edead1e41fc9bf0f9c` 的完整原生回归83组通过，报告 `tern-kiku-test-kqycomoe/report.json`。已查看该次基准选择、关闭确认、普通移除确认及危险风险预览截图，未展示风险的声明可见。
+- Standards／Spec 问题已集中修复并复核，独立删除安全审查无达到报告门槛的问题。完整证据路径与历史限制见 `docs/verification.md`。

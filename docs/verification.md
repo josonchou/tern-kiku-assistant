@@ -11,7 +11,11 @@
 
 ## 当前管理功能验收
 
-**完整验收仍受阻，03和04不得据此标记 resolved。** 用户已明确批准先集成03并推进04；这只改变实施顺序，不降低验收条件。
+**完整验收已通过，01–04及 spec 均已解决。** 最终验收代码提交为 `964ec9c7e7b3af23eec691edead1e41fc9bf0f9c`，集成分支为 `integration/worktree-management`。
+
+2026-10-21，在上述环境执行 `PYTHONDONTWRITEBYTECODE=1 python3 tests/integration.py`，完整83组通过，覆盖已有创建／基准分支、发现与复用、安全关闭、普通与危险移除、身份退化、Git 操作恢复保护及错误后重入。报告：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-kqycomoe/report.json`。
+
+已查看该次 `shots/serve/` 中的 `base-picker.png`、`management-close-confirm.png`、`normal-removal-confirm.png`、`dangerous-removal-risk-preview.png` 和 `dangerous-removal-truncated-risk-preview.png`。本次通过不表示历史宿主50ms限制的根因已被解决；没有提高时限、自动重载或失败重试。
 
 ### 最终审查修复验证
 
@@ -50,7 +54,7 @@
 
 另外用真实 `git merge --autostash --no-commit --no-ff` 构造已开始但尚未结束的同树合并：工作目录、索引、HEAD和普通refs均保持原审查值，未提交内容只存在于`MERGE_AUTOSTASH`。修正前原生流程仍删除了目标与恢复指针，证据目录 `tern-kiku-test-zwnbo0zh`。共享审查现验证目标private Git目录/backpointer，同时检查目录标记及目标自己的root refs；files/reftable后端的真实Git实验确认二者不能互相替代。新增原生回归通过9组记录：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-wu2fp1g8/report.json`，覆盖两入口初审与末次拒绝、恢复内容保留、其他pending worktree不误阻止安全目标、合法relative backpointer以及普通`MERGE_HEAD`同名分支。相对metadata先在`tern-kiku-test-wsbchvj0`获得真实red；现按private Git目录解析相对路径，并用目录名/root-ref精确识别操作状态，避免`rev-parse MERGE_HEAD`误命中普通分支。根引用查询复用现有命令步骤，不在成功路径拼接整段refs输出作为错误提示。已查看拒绝截图，原因与“先保存内容，再手动完成或中止”的建议可见。
 
-### 宿主阻塞的隔离证据
+### 历史宿主阻塞的隔离证据
 
 只加载真实Tern SDK、不加载业务模块且不启用trace的最小探针，对同一路径调用真实realpath：callback接口完成200次；awaitable接口在第174次提交边界触发同类50ms上限。证据：`/private/tmp/twm-process-probe-z0bbzteo/outcomes.json` 与其 `await/logs/tern-serve.log:525-530`。这些证据尚不能细分SDK原生调用、系统调度或临时日志的影响；不能把猜测写成根因。
 

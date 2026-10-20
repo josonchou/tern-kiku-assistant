@@ -40,3 +40,4 @@ Spec: ../spec.md
 - 真实 green：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-ytvddzqn/report.json`，30 组集成场景通过。
 - 覆盖无绑定拒绝、未保存文件、锁定会话、忙碌终端、未知原生面板、干净 Notebook、浮动 pane、预览期间新增 pane、确认期间启动命令、取消，以及关闭后复用剩余环境；其他 tabs/panes/sessions、文件字节、refs 和 worktree 登记均按场景核验保留。
 - 原生截图位于同一报告目录的 `shots/serve/management-close-confirm.png` 与 `management-close-pane.png`；主线程已检查确认列表和单行可滚动信息预览。
+- 最终共享根身份检查同时保护关闭入口：目标 `.git` 丢失并退化到父仓库时拒绝，不关闭父环境。验收代码 `964ec9c7e7b3af23eec691edead1e41fc9bf0f9c` 的完整原生回归83组通过，报告 `tern-kiku-test-kqycomoe/report.json`；已查看该次关闭确认截图，完整证据路径见 `docs/verification.md`。

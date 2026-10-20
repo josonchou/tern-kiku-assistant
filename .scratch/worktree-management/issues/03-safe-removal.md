@@ -1,6 +1,6 @@
 # 03 正常移除与风险审查
 
-Status: claimed
+Status: resolved
 Type: task
 Blocked by: 01
 Spec: ../spec.md
@@ -38,9 +38,10 @@ Spec: ../spec.md
 
 ## Result
 
-实现提交 `ecb5941c9ed84389f0bbee11397caedd1f7c20c9` 已通过 `42b7f6b82a1154a0bd31f99a610310d394e1fd10` 集成，提供普通移除、共享身份与使用者审查、完整文件风险与索引保护、Detached 引用保护和确认后复查。当前状态保持 claimed，不宣称完成验收。
+实现提交 `ecb5941c9ed84389f0bbee11397caedd1f7c20c9` 已通过 `42b7f6b82a1154a0bd31f99a610310d394e1fd10` 集成；共享 Git 操作恢复保护随04提交 `5462e3dd61a3a6e831aed2d88e405a5dc97474b9` 经 `53147a5f7c64616fb2e770f8e80c5573998a0c6c` 集成。普通移除、身份与使用者审查、文件／索引／Detached 保护和最终复查均已完成验收。
 
-- 普通模块全部原生场景已通过28组记录（含加载和helpers），证据目录 `tern-kiku-test-y0btow2_`，覆盖文件风险、引用保护、嵌套/失效/替换身份、确认期间变化、各类使用者和真实Git错误后的保留与重入。
-- 04切片补充共享未完成Git操作保护：真实autostash竞态先失败再通过；当前两入口初审/末次保护及相对metadata、普通同名分支兼容性通过9组，证据目录 `tern-kiku-test-wu2fp1g8`。恢复提交及内容均保留，其他工作树中的未完成操作不阻止安全目标移除。
-- 最新完整回归记录 `tern-kiku-test-evmeqxnq` 通过12组旧创建/基础检查后，在旧创建流程触发 `process exceeded 50 ms`，尚未进入新增移除场景；其 `logs/tern-serve.log:10-11` 保存宿主错误。没有提高预算、自动重载或失败重试。
-- 用户批准先集成并推进04；最终集成审查及当前完整回归尚待完成，不能以模块通过代替完整验收，本任务保持claimed。
+- 最终审查修复后的普通模块通过28组记录（含加载和helpers），证据目录 `tern-kiku-test-7u51xxao`，覆盖文件风险、引用保护、嵌套／失效／替换身份、确认期间变化、各类使用者和真实 Git 错误后的保留与重入。
+- 两入口未完成 Git 操作的初审／末次保护及合法相对 metadata、普通同名分支兼容性通过9组，证据目录 `tern-kiku-test-5g0f82_n`。恢复提交及内容保留，其他工作树中的未完成操作不阻止安全目标移除。
+- 最终验收代码 `964ec9c7e7b3af23eec691edead1e41fc9bf0f9c` 上，`PYTHONDONTWRITEBYTECODE=1 python3 tests/integration.py` 完整通过83组；报告 `tern-kiku-test-kqycomoe/report.json`，完整路径及截图记录见 `docs/verification.md`。
+- Standards／Spec 审查问题已集中修复并复核，独立删除安全审查未发现达到报告门槛的问题。
+- 历史运行 `tern-kiku-test-evmeqxnq` 曾触发 `process exceeded 50 ms`，用户因此授权先集成03并推进04。没有放大时限、自动重载或失败重试；现依据真实完整验收解决本任务，不宣称宿主时限问题已被修复。

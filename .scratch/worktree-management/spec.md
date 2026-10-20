@@ -1,6 +1,6 @@
 # Tern worktree 管理
 
-Status: claimed
+Status: resolved
 
 ## 目标与来源
 
@@ -49,8 +49,18 @@ Status: claimed
 
 实现顺序按当前可领取前沿推进；各 ticket 独立分支与 worktree。受当前宿主写入隔离约束，实现子代理串行执行并由主线程整合；只读调查和审查可并行。
 
-推进例外：完整原生回归受 Tern 0.9.5 的 50 ms hook 上限阻塞后，用户明确批准先集成03实现并推进04，暂时放宽领取04的前置顺序。此授权不等于验收通过；03及其他受阻任务继续保持 claimed，完整验收仍为阻塞，不能提前 resolved。
+历史推进例外：完整原生回归曾受 Tern 0.9.5 报出的 `process exceeded 50 ms` 阻塞，用户明确批准先集成03实现并推进04，暂时放宽领取04的前置顺序。当时03及其他受阻任务仍保持 claimed，没有提前 resolved；最终集中修复及完整验收通过后才完成结案。
 
 ## 完成规则
 
 每个 ticket 完成实现、集成、针对性验证后设置 resolved 并记录提交与证据。全部任务完成后，对集成分支做 code-review 和删除风险安全审查，集中修复，再运行完整真实集成验证。最后解决规范、报告集成分支并清理实施 worktree。无远端且采用本地跟踪器，不创建 PR 或推送。
+
+## Result
+
+- 01–04均已完成实现、集成和验收，并按本地 Markdown 跟踪器规则设置为 resolved。
+- 集成分支：`integration/worktree-management`。最终验收代码提交：`964ec9c7e7b3af23eec691edead1e41fc9bf0f9c`；集中修复提交为 `9488ac5ef4c000249ec5c7b0f1cdf08998ef761b` 和 `e26159527374e03562c4a8b6c4a409ae6c50ffcc`。
+- 2026-10-21，在 macOS arm64／Tern 0.9.5 (2863c37) 上运行 `PYTHONDONTWRITEBYTECODE=1 python3 tests/integration.py`，完整83组通过。报告：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-kqycomoe/report.json`。
+- Standards 的文案依赖与 Spec 的身份核验问题均已修复并复核；原生截图补充暴露的错误反馈及完整路径披露问题也已修复，未弱化数据保留断言。独立删除安全审查未发现达到报告门槛的问题。
+- 已检查实际基准选择、关闭确认、普通移除确认及危险风险预览截图；另有真实 Git 部分删除失败和恢复信息保留的验证。详细证据与平台边界见 `docs/verification.md`。
+- 无远端，未创建 PR 或推送；本次结案只更新状态与验证记录，不改变已验收实现。
+

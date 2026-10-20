@@ -42,3 +42,4 @@ Spec: ../spec.md
 - Green：完整真实 Tern/Git 回归 27 组通过；覆盖全部原创建路径、外部发现、复用、多候选、跨会话、子目录和符号链接、取消与独立快捷键。报告：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-rbinn655/report.json`。
 - 删除仅验证 argv 转发、字段复制和文案复制的断言后，在隔离 Tern 原生运行时重新执行了 29 条行为／边界断言，全部通过。
 - 真实探针修正了两个身份假设：SDK 已一次枚举全部会话，必须按 `TabInfo.session` 关联；Git 对 symlink 父目录的创建目标使用 canonical 登记路径。发现过程不再切换会话。
+- 最终集中修复补齐了嵌套目标 `.git` 丢失时的根身份检查，以及创建后选择登记前的身份核验；合法嵌套与符号链接目标仍可使用。验收代码 `964ec9c7e7b3af23eec691edead1e41fc9bf0f9c` 的完整原生回归83组通过，报告 `tern-kiku-test-kqycomoe/report.json`，完整证据路径见 `docs/verification.md`。
