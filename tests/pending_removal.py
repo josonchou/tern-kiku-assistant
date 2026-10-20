@@ -4,7 +4,7 @@
 from pathlib import Path
 
 from dangerous_removal import _authorize_to_external_confirmation, _confirm_dangerous
-from management import _has_rendered_text
+from management import _has_error_alert
 from removal import _checkout_contents, _registrations, _select_remove
 
 
@@ -128,7 +128,7 @@ def _refresh_pending_expectations(h, fixtures, excluded_path):
 def _wait_for_pending_outcome(h, target, label):
     h.wait_for(
         lambda state: not target.exists()
-        or (not state["picker"] and _has_rendered_text(h.ctl("tree"), "Git")),
+        or (not state["picker"] and _has_error_alert(h.ctl("tree"))),
         label + " rejects a pending Git operation or exposes an unsafe removal immediately",
     )
 

@@ -81,7 +81,7 @@ end
 local function failOpen(cx, flow, path, message)
     if flow.kind == "create" then
         finish(flow)
-        cx:toast("error", "Worktree 已创建，打开标签页失败", path .. "\n" .. message)
+        cx:toast("error", "Worktree 已创建，打开标签页失败", message .. "\n" .. path)
     else
         fail(cx, flow, message)
     end
@@ -956,6 +956,11 @@ local function openWorktree(cx, flow, worktree)
     if worktree.bare then fail(cx, flow, "Bare repository 没有可打开的工作目录：" .. worktree.path); return end
     readGitAt(cx, flow, worktree.path, { "rev-parse", "--show-toplevel" }, function(rootCx, root)
         local targetRoot = git.chomp(root)
+        if targetRoot ~= worktree.path then
+            failOpen(rootCx, flow, worktree.path,
+                "Git 实际 root 与登记路径不一致，请手动核查工作树登记及目标 .git 指针。")
+            return
+        end
         readGitAt(rootCx, flow, worktree.path,
             { "rev-parse", "--path-format=absolute", "--git-common-dir" }, function(commonCx, common)
                 local targetCommonDir = git.chomp(common)
@@ -990,17 +995,25 @@ local function openTab(cx, flow)
                     failOpen(commonCx, flow, flow.path, "创建结果属于其他 Git 仓库。")
                     return
                 end
-                readWorktrees(commonCx, flow, function(listCx)
-                    for _, worktree in ipairs(flow.worktrees) do
-                        if worktree.path == targetRoot then
-                            openWorktree(listCx, flow, worktree)
+                readGitAt(commonCx, flow, flow.path, { "rev-parse", "--show-prefix" },
+                    function(prefixCx, prefix)
+                        if git.chomp(prefix) ~= "" then
+                            failOpen(prefixCx, flow, flow.path,
+                                "Git 身份不符；请核查目标 .git 与登记。")
                             return
                         end
-                    end
-                    failOpen(listCx, flow, flow.path, "Git 未登记刚创建的工作树。")
+                        readWorktrees(prefixCx, flow, function(listCx)
+                            for _, worktree in ipairs(flow.worktrees) do
+                                if worktree.path == targetRoot then
+                                    openWorktree(listCx, flow, worktree)
+                                    return
+                                end
+                            end
+                            failOpen(listCx, flow, flow.path, "Git 未登记刚创建的工作树。")
+                        end)
+                    end)
                 end)
             end)
-    end)
 end
 
 create = function(cx, flow, path)

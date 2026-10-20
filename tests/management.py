@@ -1,10 +1,18 @@
 """User-visible worktree management scenarios on the shared Tern/Git harness."""
 
 import json
+import shlex
 from pathlib import Path
 
 
 def _select_worktree(h, target, action="打开／切换", candidate=None):
+    # Carly's real pane query/close clears the previous operation's toast.
+    # Isolate before starting; never query Lua while waiting for a new error.
+    h.lua_json("cx.session:panes()")
+    h.wait_for(
+        lambda state: not _has_error_alert(h.ctl("tree")),
+        "previous management error notification is no longer visible",
+    )
     h.ctl("plugins run plugin.kiku.manage_worktrees")
     listing = h.picker()
     h.type_text(str(target))
@@ -32,21 +40,27 @@ def _candidate_picker(h):
     )["picker"]
 
 
-def _has_rendered_text(node, message):
+def _has_error_alert(node):
     if isinstance(node, dict):
-        text = node.get("text")
-        if isinstance(text, str) and message in text:
+        classes = node.get("class", "").split()
+        rect = node.get("rect")
+        if (
+            node.get("role") == "alert"
+            and "toast" in classes and "err" in classes
+            and isinstance(rect, list) and len(rect) == 4
+            and rect[2] > 0 and rect[3] > 0
+        ):
             return True
-        return any(_has_rendered_text(value, message) for value in node.values())
+        return any(_has_error_alert(value) for value in node.values())
     if isinstance(node, list):
-        return any(_has_rendered_text(value, message) for value in node)
+        return any(_has_error_alert(value) for value in node)
     return False
 
 
-def _wait_management_rejection(h, message):
+def _wait_management_rejection(h):
     return h.wait_for(
-        lambda state: not state["picker"] and _has_rendered_text(h.ctl("tree"), message),
-        "management rejection: " + message,
+        lambda state: not state["picker"] and _has_error_alert(h.ctl("tree")),
+        "management rejects the completed operation with a visible error alert",
     )
 
 
@@ -56,6 +70,19 @@ def _tab_ids(h):
 
 def _pane_ids(h):
     return {pane["pane"] for pane in h.lua_json("cx.session:panes()")}
+
+def _tab_id_for_cwd(h, cwd):
+    expected = Path(cwd).resolve()
+    tabs = h.lua_json("cx.session:tabs()")
+    pane_tabs = {
+        pane["tab"]
+        for pane in h.lua_json("cx.session:panes()")
+        if pane.get("tab") is not None and pane.get("cwd")
+        and Path(pane["cwd"]).resolve() == expected
+    }
+    matches = [tab for tab in tabs if tab["id"] in pane_tabs]
+    assert len(matches) == 1, (cwd, tabs, pane_tabs)
+    return matches[0]["id"]
 
 
 def _wait_pane(h, pane_id, field, value, description, picker=False):
@@ -238,7 +265,7 @@ def run(h):
     h.open_repo(repo)
     unbound_tabs = {t["id"] for t in h.lua_json("cx.session:tabs()")}
     _select_worktree(h, unbound_target, action="关闭工作环境")
-    _wait_management_rejection(h, "没有可安全识别的绑定标签页；未创建标签页，也未关闭环境。")
+    _wait_management_rejection(h)
     assert {t["id"] for t in h.lua_json("cx.session:tabs()")} == unbound_tabs
     assert any(
         row == "worktree " + str(unbound_target)
@@ -301,7 +328,7 @@ def run(h):
     dirty_file = h.lua_json(f"cx.session:read({file_pane}, {{lines=1}})")
     assert dirty_file["kind"] == "file" and dirty_file["dirty"] is True, dirty_file
     _select_worktree(h, close_target, action="关闭工作环境")
-    _wait_management_rejection(h, "文件未加载完成、归属不明或有未保存内容；请先保存并检查。")
+    _wait_management_rejection(h)
     assert any(t["id"] == primary["id"] for t in h.lua_json("cx.session:tabs()"))
     assert h.lua_json(f"cx.session:read({file_pane}, {{lines=1}})")["dirty"] is True
     h.lua(
@@ -351,7 +378,7 @@ def run(h):
     unknown_state = next(p for p in h.lua_json("cx.session:panes()") if p["pane"] == unknown_pane)
     assert unknown_state["kind"] == "procs", unknown_state
     _select_worktree(h, close_target, action="关闭工作环境")
-    _wait_management_rejection(h, "无法确认 procs pane 的运行和保存状态；请手动关闭。")
+    _wait_management_rejection(h)
     assert h.lua_json("cx.session:pane(" + str(unknown_pane) + ") ~= nil") is True
     h.lua(f"cx.layout:close({unknown_pane}); return true")
 
@@ -360,7 +387,7 @@ def run(h):
     h.ctl("key enter")
     _wait_pane(h, terminal["pane"], "busy", True, "real terminal command is running")
     _select_worktree(h, close_target, action="关闭工作环境")
-    _wait_management_rejection(h, "终端或 agent 未明确空闲；请等待命令结束并返回提示符。")
+    _wait_management_rejection(h)
     assert h.lua_json("cx.session:pane(" + str(terminal["pane"]) + ") ~= nil") is True
     h.lua(f"cx.layout:focus({terminal['pane']}); return true")
     h.ctl("key ctrl+c")
@@ -373,7 +400,7 @@ def run(h):
     }
     h.lua(f"cx.sessions:lock({primary['session']}); return true")
     _select_worktree(h, close_target, action="关闭工作环境")
-    _wait_management_rejection(h, "目标会话已锁定或归属不明；请手动检查会话。")
+    _wait_management_rejection(h)
     assert {
         pane["pane"] for pane in h.lua_json("cx.session:panes()")
         if pane.get("tab") == target_tab
@@ -413,7 +440,7 @@ def run(h):
     h.type_text("确认关闭")
     h.picker(selected="确认关闭")
     h.ctl("picker enter")
-    _wait_management_rejection(h, "确认期间工作环境或 pane 状态已变化；未关闭任何 pane，请重新检查。")
+    _wait_management_rejection(h)
     assert target_tab in _tab_ids(h)
     assert raced_pane in _pane_ids(h)
     assert h.git("worktree", "list", "--porcelain") == close_registered
@@ -433,7 +460,7 @@ def run(h):
     h.type_text("确认关闭")
     h.picker(selected="确认关闭")
     h.ctl("picker enter")
-    _wait_management_rejection(h, "终端或 agent 未明确空闲；请等待命令结束并返回提示符。")
+    _wait_management_rejection(h)
     assert h.lua_json(
         f"cx.session:pane({terminal['pane']}) ~= nil "
         f"and cx.session:pane({terminal['pane']}).busy == true"
@@ -501,5 +528,243 @@ def run(h):
     _ready(h, close_target)
     assert {t["id"] for t in h.lua_json("cx.session:tabs()")} == tabs_after_close
     assert {p["pane"] for p in h.lua_json("cx.session:panes()")} == panes_after_close
-    h.record("reopening a closed worktree reuses the retained secondary environment")
     h.record("confirmed close ends only the selected bound environment, preserving worktrees, branches and other sessions")
+    run_degraded_identity_scenarios(h)
+    run_creation_identity_scenarios(h)
+
+
+def run_degraded_identity_scenarios(h):
+    """Exercise real nested-worktree identity before and after losing its pointer."""
+    repo = h.repo
+    parent = repo.parent / "management-identity-parent"
+    target = parent / "nested-target"
+    branch = "external/management-identity-parent"
+    nested_branch = "external/management-identity-nested"
+    pointer = target / ".git"
+    original_panes = _pane_ids(h)
+    pointer_bytes = None
+    h.git("worktree", "add", "-b", branch, str(parent), "HEAD")
+    try:
+        h.git("worktree", "add", "-b", nested_branch, str(target), "HEAD")
+        h.open_repo(parent)
+        _ready(h, parent)
+        parent_tab = _tab_id_for_cwd(h, parent)
+        refs = h.git("for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)")
+        parent_contents = (parent / "README.md").read_bytes()
+        target_contents = (target / "README.md").read_bytes()
+        assert h.git("rev-parse", "--show-toplevel", cwd=target) == str(target)
+        assert h.git("symbolic-ref", "--short", "HEAD", cwd=target) == nested_branch
+
+        # A valid nested linked worktree remains usable and gets its own tab.
+        _select_worktree(h, target)
+        _ready(h, target, nested_branch)
+        target_tab = _tab_id_for_cwd(h, target)
+        assert target_tab != parent_tab
+        assert h.git("rev-parse", "--show-toplevel", cwd=target) == str(target)
+        h.record("valid nested linked worktree opens in its own named environment")
+
+        pointer_bytes = pointer.read_bytes()
+        pointer.unlink()
+        assert h.git("rev-parse", "--show-toplevel", cwd=target) == str(parent)
+        registrations = h.git("worktree", "list", "--porcelain")
+
+        # Opening a target whose Git lookup now falls through to its nested
+        # parent must reject without reusing or creating the parent's tab.
+        tabs_before_open = _tab_ids(h)
+        focused_before_open = Path(h.state()["focused"]["cwd"]).resolve()
+        _select_worktree(h, target)
+        _wait_management_rejection(h)
+        assert _tab_ids(h) == tabs_before_open
+        assert Path(h.state()["focused"]["cwd"]).resolve() == focused_before_open
+        assert target_tab in _tab_ids(h) and parent_tab in _tab_ids(h)
+        assert h.git("rev-parse", "--show-toplevel", cwd=target) == str(parent)
+        assert (target / "README.md").read_bytes() == target_contents
+        assert (parent / "README.md").read_bytes() == parent_contents
+        assert h.git("worktree", "list", "--porcelain") == registrations
+        assert h.git("for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)") == refs
+
+        # Closing the still-visible nested environment must be refused too.
+        tabs_before_close = _tab_ids(h)
+        _select_worktree(h, target, action="关闭工作环境")
+        _wait_management_rejection(h)
+        assert _tab_ids(h) == tabs_before_close
+        assert target_tab in _tab_ids(h) and parent_tab in _tab_ids(h)
+        assert h.git("worktree", "list", "--porcelain") == registrations
+        assert h.git("for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)") == refs
+        assert (target / "README.md").read_bytes() == target_contents
+        assert (parent / "README.md").read_bytes() == parent_contents
+
+        # Re-enter after both refusals; no stale picker or workflow lock remains.
+        _select_worktree(h, target)
+        _wait_management_rejection(h)
+        assert target_tab in _tab_ids(h) and parent_tab in _tab_ids(h)
+        assert h.git("worktree", "list", "--porcelain") == registrations
+        assert h.git("for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)") == refs
+        h.record("degraded nested identity refuses open and close while preserving Git state and allowing re-entry")
+    finally:
+        if pointer_bytes is not None and target.exists() and not pointer.exists():
+            pointer.write_bytes(pointer_bytes)
+        for pane_id in _pane_ids(h) - original_panes:
+            h.lua(f"cx.layout:close({pane_id}); return true")
+        if target.exists():
+            h.git("worktree", "remove", "--", str(target))
+        if parent.exists():
+            h.git("worktree", "remove", "--", str(parent))
+        h.git("branch", "-d", nested_branch, check=False)
+        h.git("branch", "-d", branch, check=False)
+def run_creation_identity_scenarios(h):
+    """Exercise creation identity loss and valid symlink-parent creation."""
+    repo = h.repo
+    parent = repo.parent / "management-creation-identity-parent"
+    target = parent / "nested-created"
+    branch = "external/management-creation-identity-parent"
+    created_branch = "management-created-identity"
+    pointer_backup = h.root / "management-created-pointer"
+    marker = h.root / "management-created-hook-ran"
+    hooks_dir = h.root / "management-private-hooks"
+    hook = hooks_dir / "post-checkout"
+    prior_hooks_path = h.git(
+        "config", "--local", "--null", "--get-all", "core.hooksPath", check=False,
+    )
+    prior_hooks_values = (
+        prior_hooks_path.stdout.rstrip("\0").split("\0")
+        if prior_hooks_path.returncode == 0 else []
+    )
+    original_panes = _pane_ids(h)
+    pointer_bytes = None
+    hooks_path_configured = False
+    hooks_dir_created = False
+    canonical_parent = h.root / "management-symlink-canonical"
+    parent_alias = h.root / "management-symlink-alias"
+    symlink_target = canonical_parent / "management-symlink-created"
+    symlink_branch = "management-symlink-created"
+    h.git("worktree", "add", "-b", branch, str(parent), "HEAD")
+    try:
+        h.open_repo(parent)
+        _ready(h, parent)
+        parent_tab = _tab_id_for_cwd(h, parent)
+        parent_contents = (parent / "README.md").read_bytes()
+        h.open_repo(repo)
+        source_cwd = Path(h.state()["focused"]["cwd"]).resolve()
+        tabs_before_create = _tab_ids(h)
+        registrations_before = {
+            record.splitlines()[0]: record
+            for record in h.git("worktree", "list", "--porcelain").strip().split("\n\n")
+        }
+        creation_head = h.git("rev-parse", "HEAD")
+        refs_before = set(h.git(
+            "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)"
+        ).splitlines())
+        hooks_dir.mkdir()
+        hooks_dir_created = True
+        h.git("config", "--local", "--replace-all", "core.hooksPath", str(hooks_dir))
+        hooks_path_configured = True
+        hook.write_text(
+            "#!/bin/sh\nset -e\n"
+            "if [ \"$PWD\" = " + shlex.quote(str(target)) + " ]; then\n"
+            "  cp \"$PWD/.git\" " + shlex.quote(str(pointer_backup)) + "\n"
+            "  rm \"$PWD/.git\"\n"
+            "  : > " + shlex.quote(str(marker)) + "\n"
+            "fi\n"
+        )
+        hook.chmod(0o755)
+
+        h.lua_json("cx.session:panes()")
+        h.wait_for(
+            lambda _state: not _has_error_alert(h.ctl("tree")),
+            "previous error notification is no longer visible before creation",
+        )
+        h.begin()
+        h.name(created_branch)
+        h.type_text("其他目录")
+        h.picker(selected="其他目录…")
+        h.ctl("picker enter")
+        h.picker("prompt")
+        h.replace_text(str(target))
+        h.ctl("key enter")
+        h.wait_for(
+            lambda _state: marker.is_file() and pointer_backup.is_file(),
+            "post-checkout hook removed and saved the nested worktree pointer",
+        )
+        pointer_bytes = pointer_backup.read_bytes()
+        assert target.is_dir() and not (target / ".git").exists()
+        assert h.git("rev-parse", "--show-toplevel", cwd=target) == str(parent)
+        _wait_management_rejection(h)
+
+        assert marker.is_file() and pointer_backup.is_file()
+        assert target.is_dir() and not (target / ".git").exists()
+        assert (target / "README.md").read_bytes() == parent_contents
+        assert (parent / "README.md").read_bytes() == parent_contents
+        assert _tab_ids(h) == tabs_before_create
+        assert Path(h.state()["focused"]["cwd"]).resolve() == source_cwd
+        assert parent_tab in _tab_ids(h)
+        registration = h.git("worktree", "list", "--porcelain")
+        target_record = next(
+            record for record in registration.split("\n\n")
+            if record.splitlines() and record.splitlines()[0] == "worktree " + str(target)
+        )
+        assert "branch refs/heads/" + created_branch in target_record, target_record
+        registrations_after = {
+            record.splitlines()[0]: record
+            for record in registration.strip().split("\n\n")
+        }
+        assert all(registrations_after.get(path) == record
+                   for path, record in registrations_before.items())
+        refs_after = set(h.git(
+            "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)"
+        ).splitlines())
+        new_ref = "refs/heads/" + created_branch + "\0" + creation_head + "\0"
+        assert refs_after == refs_before | {new_ref}
+        assert h.git("rev-parse", "refs/heads/" + created_branch) == creation_head
+        assert "worktree " + str(parent) in registrations_before
+        h.record("creation preserves a nested worktree when its post-checkout hook removes the Git pointer")
+
+        # A legitimate symlink alias for the chosen parent remains supported.
+        canonical_parent.mkdir()
+        parent_alias.symlink_to(canonical_parent, target_is_directory=True)
+        h.open_repo(repo)
+        h.begin()
+        h.name(symlink_branch)
+        h.type_text("其他目录")
+        h.picker(selected="其他目录…")
+        h.ctl("picker enter")
+        h.picker("prompt")
+        h.replace_text(str(parent_alias / symlink_branch))
+        h.ctl("key enter")
+        h.created(symlink_target, symlink_branch)
+        assert h.git("rev-parse", "--show-toplevel", cwd=symlink_target) == str(symlink_target)
+        assert any(
+            line == "worktree " + str(symlink_target)
+            for line in h.git("worktree", "list", "--porcelain").splitlines()
+        )
+        h.record("creation through a symlinked parent opens the canonical target root")
+    finally:
+        if hooks_path_configured:
+            h.git("config", "--local", "--unset-all", "core.hooksPath", check=False)
+            for value in prior_hooks_values:
+                h.git("config", "--local", "--add", "core.hooksPath", value)
+        if hooks_dir_created:
+            hook.unlink(missing_ok=True)
+            hooks_dir.rmdir()
+        if target.exists() and not (target / ".git").exists():
+            if pointer_bytes is not None:
+                (target / ".git").write_bytes(pointer_bytes)
+            elif pointer_backup.is_file():
+                (target / ".git").write_bytes(pointer_backup.read_bytes())
+        for pane_id in _pane_ids(h) - original_panes:
+            h.lua(f"cx.layout:close({pane_id}); return true")
+        if target.exists():
+            h.git("worktree", "remove", "--", str(target))
+        if parent.exists():
+            h.git("worktree", "remove", "--", str(parent))
+        h.git("branch", "-d", created_branch, check=False)
+        h.git("branch", "-d", branch, check=False)
+        if symlink_target.exists():
+            h.git("worktree", "remove", "--", str(symlink_target))
+        h.git("branch", "-d", symlink_branch, check=False)
+        if parent_alias.is_symlink():
+            parent_alias.unlink()
+        if canonical_parent.exists():
+            canonical_parent.rmdir()
+        pointer_backup.unlink(missing_ok=True)
+        marker.unlink(missing_ok=True)

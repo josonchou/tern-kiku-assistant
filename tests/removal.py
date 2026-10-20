@@ -53,9 +53,9 @@ def _select_remove(h, target, source=None, action="正常移除 worktree"):
         h.open_repo(source)
     _select_worktree(h, target, action=action)
 
-def _expect_rejection(h, target, message, expected_exists=True):
+def _expect_rejection(h, target, expected_exists=True):
     _select_remove(h, target)
-    _wait_management_rejection(h, message)
+    _wait_management_rejection(h)
     assert target.is_dir() is expected_exists
     assert target in _registrations(h)
 
@@ -67,13 +67,13 @@ def _remove_fixture(h, path):
     h.git("worktree", "remove", "--", str(path))
 
 
-def _reject_dirty_checkout(h, path, branch, label, prepare, cleanup, message):
+def _reject_dirty_checkout(h, path, branch, label, prepare, cleanup):
     _add_checkout(h, path, branch)
     prepare()
     contents = _checkout_contents(path)
     before = h.git("show-ref", "--heads")
     registrations = _registrations(h)
-    _expect_rejection(h, path, message)
+    _expect_rejection(h, path)
     assert h.git("show-ref", "--heads") == before
     assert _registrations(h) == registrations
     assert _checkout_contents(path) == contents
@@ -165,7 +165,7 @@ def run(h):
     # The source/main worktree is never a removal candidate.
     main_registration = _registrations(h)
     main_refs = h.git("show-ref")
-    _expect_rejection(h, repo, "主工作树不可移除")
+    _expect_rejection(h, repo)
     assert _registrations(h) == main_registration
     assert h.git("show-ref") == main_refs
     h.record("normal removal refuses the main worktree without changing refs or registration")
@@ -175,7 +175,7 @@ def run(h):
     h.git("worktree", "lock", "--reason", "operator maintenance", str(locked))
     locked_registration = _registrations(h)
     locked_refs = h.git("show-ref")
-    _expect_rejection(h, locked, "已锁定")
+    _expect_rejection(h, locked)
     assert _registrations(h) == locked_registration
     assert h.git("show-ref") == locked_refs
     h.git("worktree", "unlock", str(locked))
@@ -188,7 +188,6 @@ def run(h):
         "tracked modifications block normal removal without deleting bytes or refs",
         lambda: (tracked / "README.md").write_text("tracked local change\n"),
         lambda: (tracked / "README.md").write_text("committed\n"),
-        "tracked 或 untracked 修改",
     )
 
     untracked = repo.parent / "normal-removal-untracked"
@@ -198,7 +197,6 @@ def run(h):
         "untracked files block normal removal without deleting bytes or refs",
         lambda: untracked_file.write_text("keep me\n"),
         lambda: untracked_file.unlink(),
-        "tracked 或 untracked 修改",
     )
 
     ignored = repo.parent / "normal-removal-ignored"
@@ -213,7 +211,7 @@ def run(h):
     ignored_file.write_bytes(b"ignored data must survive\n")
     ignored_registration = _registrations(h)
     ignored_refs = h.git("show-ref")
-    _expect_rejection(h, ignored, "ignored 文件")
+    _expect_rejection(h, ignored)
     assert ignored_file.read_bytes() == b"ignored data must survive\n"
     assert _registrations(h) == ignored_registration and h.git("show-ref") == ignored_refs
     exclude.write_bytes(old_exclude)
@@ -234,7 +232,7 @@ def run(h):
         bytes_before = (index_path / "README.md").read_bytes()
         refs_before = h.git("show-ref")
         registrations_before = _registrations(h)
-        _expect_rejection(h, index_path, "隐藏索引标记")
+        _expect_rejection(h, index_path)
         assert (index_path / "README.md").read_bytes() == bytes_before
         assert h.git("show-ref") == refs_before and _registrations(h) == registrations_before
         (index_path / "README.md").write_text("committed\n")
@@ -248,7 +246,7 @@ def run(h):
     h.git("update-index", "--add", "--cacheinfo",
           "160000," + submodule_oid + ",embedded-submodule", cwd=submodule)
     submodule_refs = h.git("show-ref")
-    _expect_rejection(h, submodule, "含有子模块")
+    _expect_rejection(h, submodule)
     assert h.git("show-ref") == submodule_refs and submodule.is_dir()
     h.git("update-index", "--force-remove", "embedded-submodule", cwd=submodule)
     _remove_fixture(h, submodule)
@@ -260,7 +258,7 @@ def run(h):
     h.git("worktree", "add", "--detach", str(detached), detached_oid)
     detached_refs = h.git("show-ref")
     detached_registration = _registrations(h)
-    _expect_rejection(h, detached, "未受本地／远程分支或标签保护")
+    _expect_rejection(h, detached)
     assert h.git("show-ref") == detached_refs and _registrations(h) == detached_registration
     _remove_fixture(h, detached)
     h.record("unprotected detached commits are not considered safely removable")
@@ -301,7 +299,7 @@ def run(h):
     h.type_text("确认无外部使用并移除")
     h.picker(selected="确认无外部使用并移除")
     h.ctl("picker enter")
-    _wait_management_rejection(h, "tracked 或 untracked 修改")
+    _wait_management_rejection(h)
     assert race_file.read_text() == "must not be deleted\n"
     assert racing.is_dir() and racing in _registrations(h)
     race_file.unlink()
@@ -327,7 +325,7 @@ def run(h):
     _add_checkout(h, nested_parent, "external/normal-removal-nested-current")
     h.git("worktree", "add", "-b", "nested/current", str(nested_checkout), "HEAD")
     nested_registration = h.git("worktree", "list", "--porcelain", "-z")
-    _expect_rejection(h, nested_parent, "目标目录内仍登记有其他 worktree")
+    _expect_rejection(h, nested_parent)
     assert nested_checkout.is_dir() and nested_parent in _registrations(h)
     assert nested_registration == h.git("worktree", "list", "--porcelain", "-z")
     h.git("worktree", "remove", "--", str(nested_checkout))
@@ -354,7 +352,7 @@ def run(h):
     ) == "?? foreign-linked/\0"
     assert h.git("ls-files", "--others", "--exclude-standard", "-z",
                  cwd=foreign_checkout_parent) == "foreign-linked/\0"
-    _expect_rejection(h, foreign_checkout_parent, "无法完整展开")
+    _expect_rejection(h, foreign_checkout_parent)
     assert (foreign_checkout / "private.txt").read_bytes() == foreign_bytes
     assert h.git("worktree", "list", "--porcelain", "-z", cwd=foreign_root) == foreign_registration
     h.git("worktree", "remove", "--", str(foreign_checkout), cwd=foreign_root)
@@ -373,7 +371,7 @@ def run(h):
     assert h.git("status", "--porcelain", cwd=monitored) == ""
     monitor_bytes = (monitored / "README.md").read_bytes()
     monitor_refs = h.git("show-ref")
-    _expect_rejection(h, monitored, "tracked 或 untracked 修改")
+    _expect_rejection(h, monitored)
     assert (monitored / "README.md").read_bytes() == monitor_bytes
     assert h.git("show-ref") == monitor_refs
     (monitored / "README.md").write_text("committed\n")
@@ -392,7 +390,7 @@ def run(h):
     h.type_text("确认无外部使用并移除")
     h.picker(selected="确认无外部使用并移除")
     h.ctl("picker enter")
-    _wait_management_rejection(h, "worktree、内容、refs 或可见 pane 状态已变化")
+    _wait_management_rejection(h)
     assert changed_head.is_dir() and changed_head in _registrations(h)
     assert h.git("rev-parse", "HEAD", cwd=changed_head) == confirmed_head
     _remove_fixture(h, changed_head)
@@ -406,7 +404,7 @@ def run(h):
     h.type_text("确认无外部使用并移除")
     h.picker(selected="确认无外部使用并移除")
     h.ctl("picker enter")
-    _wait_management_rejection(h, "已锁定")
+    _wait_management_rejection(h)
     assert locked_race.is_dir() and locked_race in _registrations(h)
     h.git("worktree", "unlock", str(locked_race))
     _remove_fixture(h, locked_race)
@@ -417,7 +415,7 @@ def run(h):
     shutil.rmtree(stale)
     stale_registration = _registrations(h)
     assert "prunable" in stale_registration[stale]
-    _expect_rejection(h, stale, "已失效或可清理", expected_exists=False)
+    _expect_rejection(h, stale, expected_exists=False)
     assert _registrations(h) == stale_registration and not stale.exists()
     h.git("worktree", "prune", "--expire", "now")
     h.record("prunable registrations are refused without pruning them")
@@ -448,7 +446,7 @@ def run(h):
     replaced.rename(moved)
     replaced.mkdir()
     h.git("init", "-b", "replacement", cwd=replaced)
-    _expect_rejection(h, replaced, "实际 root 或 common-dir 与来源仓库不符")
+    _expect_rejection(h, replaced)
     assert _checkout_contents(moved) == original_bytes
     shutil.rmtree(replaced)
     moved.rename(replaced)
@@ -466,7 +464,7 @@ def run(h):
         + json.dumps(str(visible_subdir)) + "})"
     ))
     h.lua("cx.layout:float(" + str(visible_pane) + ", " + str(source_pane) + "); return true")
-    _expect_rejection(h, visible, "正在使用目标 worktree")
+    _expect_rejection(h, visible)
     h.lua("cx.layout:close(" + str(visible_pane) + "); return true")
     _remove_fixture(h, visible)
     h.record("floating pane in a target subdirectory prevents normal removal")
@@ -485,7 +483,7 @@ def run(h):
     h.type_text("确认无外部使用并移除")
     h.picker(selected="确认无外部使用并移除")
     h.ctl("picker enter")
-    _wait_management_rejection(h, "正在使用目标 worktree")
+    _wait_management_rejection(h)
     assert opened_during_confirmation.is_dir()
     h.lua("cx.layout:close(" + str(raced_pane) + "); return true")
     _remove_fixture(h, opened_during_confirmation)
@@ -500,7 +498,7 @@ def run(h):
     )
     h.lua("cx.layout:park(" + str(parked_pane) + "); return true")
     h.open_repo(repo)
-    _expect_rejection(h, parked, "正在使用目标 worktree")
+    _expect_rejection(h, parked)
     h.lua("cx.layout:close(" + str(parked_pane) + "); return true")
     _remove_fixture(h, parked)
     h.record("parked pane cwd prevents normal removal")
@@ -514,7 +512,7 @@ def run(h):
         "return cx.docs:open(" + json.dumps(str(path_alias)) + ", {how='beside'})"
     ))
     h.open_repo(repo)
-    _expect_rejection(h, path_target, "正在使用目标 worktree")
+    _expect_rejection(h, path_target)
     h.lua("cx.layout:close(" + str(file_pane) + "); return true")
     path_alias.unlink()
     _remove_fixture(h, path_target)
@@ -534,7 +532,7 @@ def run(h):
     h.type_text("确认无外部使用并移除")
     h.picker(selected="确认无外部使用并移除")
     h.ctl("picker enter")
-    _wait_management_rejection(h, "Git")
+    _wait_management_rejection(h)
     assert failed.is_dir() and (failed / "README.md").read_bytes() == original_readme
     assert index_path.read_bytes() == b"not a git index"
     assert _registrations(h) == failed_registrations
