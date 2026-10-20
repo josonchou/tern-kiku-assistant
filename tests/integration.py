@@ -14,6 +14,7 @@ import tempfile
 import time
 from types import SimpleNamespace
 from management import run as run_management_scenarios
+from removal import run as run_removal_scenarios
 
 PROJECT = Path(__file__).resolve().parents[1]
 ROOT = Path(tempfile.mkdtemp(prefix="tern-kiku-test-")).resolve()
@@ -185,11 +186,13 @@ def main():
         record("plugin load and shortcut registration")
         core = json.dumps(str(PLUGIN / "lib" / "worktree.luau"))
         manager_path = json.dumps(str(PLUGIN / "lib" / "manager.luau"))
+        removal_path = json.dumps(str(PLUGIN / "lib" / "removal.luau"))
         tests = json.dumps(str(PLUGIN / "tests" / "helpers.luau"))
         helper_code = (
             f'local m = loadstring(tern.fs.read({core}))()'
             f'; local manager = loadstring(tern.fs.read({manager_path}))()'
-            f'; return loadstring(tern.fs.read({tests}))()(m, manager)'
+            f'; local removal = loadstring(tern.fs.read({removal_path}))()'
+            f'; return loadstring(tern.fs.read({tests}))()(m, manager, removal)'
         )
         lua(helper_code)
         record("Luau Git and worktree manager helpers in native runtime")
@@ -462,6 +465,7 @@ def main():
             open_repo=open_repo, record=record,
         )
         run_management_scenarios(harness)
+        run_removal_scenarios(harness)
 
         (PLUGIN / "config.json").write_text(json.dumps({"defaultPath": "", "keybinding": ""}))
         ctl("plugins fixtures")

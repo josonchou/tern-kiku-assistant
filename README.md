@@ -6,7 +6,7 @@
 
 ## 安装
 
-需要 Git 和支持 `cx:pick` / `cx:prompt` 的 Tern；已在 Tern **0.9.5 (2863c37)**、macOS 上实测。
+需要 Git 和支持 `cx:pick` / `cx:prompt` 的 Tern；移除安全审查还需要系统 `realpath`。已在 Tern **0.9.5 (2863c37)**、macOS 上实测。
 
 ```bash
 tern plugin link ~/Workspace/tern-kiku-plugin
@@ -34,13 +34,19 @@ tern plugin link ~/Workspace/tern-kiku-plugin
 
 ### 管理已有 worktree
 
-从本机仓库内的命令面板运行 **Kiku: 管理 Git worktree**，或配置独立的 `manageKeybinding` 快捷键。选择当前仓库中 Git 登记的 worktree 后，可选择 **打开／切换** 或 **关闭工作环境**。列表包括 Git 或其他工具直接创建的 worktree；插件根据 Git 仓库身份和本机 pane cwd 发现有效标签页，优先复用，若有多个匹配项则让你选择，没有时才在打开操作中创建命名标签页；关闭时没有有效绑定则拒绝，不会新建标签页。
+从本机仓库内的命令面板运行 **Kiku: 管理 Git worktree**，或配置独立的 `manageKeybinding` 快捷键。选择当前仓库中 Git 登记的 worktree 后，可选择 **打开／切换**、**关闭工作环境** 或 **正常移除 worktree**。列表包括 Git 或其他工具直接创建的 worktree；插件根据 Git 仓库身份和本机 pane cwd 发现有效标签页，优先复用，若有多个匹配项则让你选择，没有时才在打开操作中创建命名标签页；关闭时没有有效绑定则拒绝，不会新建标签页。
 
 关闭只作用于选定的绑定标签页，并检查其中全部 tiled／floating pane。终端和 agent 必须明确空闲；锁定的会话、未保存文件、运行或排队的 Notebook、无法确认安全状态的工具都会被拒绝。Database 等没有充分可核验运行状态的原生面板需要手动关闭。
 
 确认列表默认选取消，明确显示目标 session／tab ID，并逐项列出将关闭的 pane。选择“查看 pane”可检查完整位置信息；预览里的输入不会修改文件或关闭对象，回车返回原确认列表，Esc 取消整个关闭流程。最终确认后重新检查环境身份、pane 集合和安全状态；预览期间的变化不会被返回操作重新认可。
 
 关闭不移除 worktree、目录或分支，不提供强制关闭。预期的安全拒绝直接显示原因及手动处理建议；部分关闭失败时报告已关闭的 pane 并停止，不继续扩大操作范围。
+
+正常移除仅针对身份已确认、未锁定且干净的 linked worktree；主工作树通过最新 Git 登记中的主工作树项识别，与发起操作的来源 worktree 分开。界面检查 tracked、untracked、ignored 文件、隐藏索引标记、Detached HEAD 的本地／远程分支及标签保护，以及当前窗口内 tiled、floating、parked pane 的 cwd、原生 path 和本机 file URL。可见本机 pane 缺少可核实位置、host 归属不明、身份不符或安全状态不完整时拒绝；远程 pane 不按本机路径误判。确认列表默认选取消；“查看完整目标路径…”会显示完整路径，返回原确认列表时不会刷新审查基线。最终确认会重新审查 Git 登记、仓库身份、文件／索引／refs 和可见 pane；状态变化即停止。成功后只移除目标目录及 Git 登记，保留分支和其他工作树。
+
+无法完整审查的嵌套仓库、子模块、嵌套 worktree、无效或锁定登记、身份未知状态均拒绝移除。安全状态读取和最终普通 Git 移除均以命令级 `core.fsmonitor=false` 绕过陈旧文件监视缓存，不改写 Git 配置；路径安全检查依赖系统 `realpath`（macOS/Linux），命令不可用或身份无法确认时拒绝移除。Git 错误保留现场，不自动关闭程序、解锁、删除分支、清理 Git 记录或强制重试。
+
+检查范围限于当前窗口可见的本机会话。其他窗口、外部终端及其他工具是否仍在使用目标，需要操作者自行确认；插件不声称检测全部外部进程或提供跨窗口原子性。移除不会自动关闭这些环境，不能代替外部使用确认。
 
 ## 与 lazygit 对齐的目录规则
 
@@ -92,15 +98,9 @@ tern plugin link ~/Workspace/tern-kiku-plugin
 - 没有首个提交的仓库没有可用 HEAD；插件会显示 Git 错误。先完成首次提交再使用。
 - 终端需要正常报告当前目录（Tern 默认 shell integration）。
 
-仅删除工作树而保留分支仍使用 Git 或 lazygit：
-
-```bash
-git worktree remove /path/to/worktree
-```
-
 ## 开发和验证
 
-无需构建，也无需 Python、Node 或 lazygit 作为插件运行依赖。运行时只有 Luau + Git。
+插件无需构建，也无需 Python、Node 或 lazygit 作为运行依赖。运行依赖 Tern/Luau 和 Git；移除安全审查额外依赖系统 `realpath`，创建和打开不需要它。Python 3 仅用于集成验证。
 
 ```bash
 # 为编辑器生成与本机 Tern 匹配的声明文件（已 gitignore）
@@ -119,6 +119,7 @@ plugin.toml          # 插件清单
 window.luau          # 原生创建／管理流程、异步 Git 操作及工作树标签页绑定
 lib/worktree.luau    # Git porcelain 解析、路径和创建参数
 lib/manager.luau     # 本机跨会话 pane 与工作树身份匹配
+lib/removal.luau     # 共用的安全移除审查与路径边界检查
 config.json          # 用户可编辑配置
 tests/               # Luau 断言及真实 Tern/Git 集成测试
 GLOSSARY.md          # 已确认的领域术语
