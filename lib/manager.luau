@@ -43,6 +43,7 @@ function M.paneRecords(panes, paneHosts, tabSessions, tabNames, sessionNames, se
             pane = pane.pane,
             path = pane.path,
             cwd = pane.cwd,
+            url = pane.url,
             kind = pane.kind,
             tab = pane.tab,
             floating = pane.floating,
@@ -96,18 +97,22 @@ function M.worktreeLabel(worktree)
     if worktree.branch then
         name = worktree.branch:gsub("^refs/heads/", "")
     elseif worktree.detached then
-        local head = worktree.head
-        if not head then head = "unknown" end
-        name = "Detached @ " .. head:sub(1, 8)
+        name = "Detached"
     else
         name = "Bare repository"
     end
+    local summary = name
+    if worktree.head then summary ..= " · HEAD " .. worktree.head:sub(1, 8) end
     local flags = {}
-    if worktree.locked then table.insert(flags, "locked" .. (worktree.lockReason ~= "" and (": " .. worktree.lockReason) or "")) end
-    if worktree.prunable then table.insert(flags, "prunable" .. (worktree.prunableReason ~= "" and (": " .. worktree.prunableReason) or "")) end
-    if #flags > 0 then name ..= " · " .. table.concat(flags, " · ") end
-    -- Tern filters only the label, so keep the complete path searchable here.
-    return worktree.path .. " · " .. name
+    if worktree.locked then
+        table.insert(flags, "LOCKED" .. (worktree.lockReason ~= "" and (": " .. worktree.lockReason) or ""))
+    end
+    if worktree.prunable then
+        table.insert(flags, "PRUNABLE" .. (worktree.prunableReason ~= "" and (": " .. worktree.prunableReason) or ""))
+    end
+    if #flags > 0 then summary ..= " · " .. table.concat(flags, " · ") end
+    -- Keep the complete path filterable, after safety-critical facts.
+    return summary .. " · " .. worktree.path
 end
 
 -- 安全拒绝直接展示给用户，不附加会挤占原生提示空间的源码前缀。

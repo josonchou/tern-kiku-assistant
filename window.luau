@@ -1,6 +1,7 @@
 local tern = require("tern")
 local git = require("./lib/worktree")
 local manager = require("./lib/manager")
+local removal = require("./lib/removal")
 
 local config = { defaultPath = "", keybinding = "", manageKeybinding = "" }
 local configError
@@ -106,6 +107,365 @@ local function readGitAt(cx, flow, cwd, args, callback)
     runGitAt(cx, flow, cwd, args, function(nextCx, result)
         if result.status ~= 0 then failOpen(nextCx, flow, flow.path or cwd, gitError(result))
         else callback(nextCx, result.stdout) end
+    end)
+end
+
+local function removalRun(cx, flow, cwd, args, callback)
+    local argv = { "git", "-c", "core.fsmonitor=false", "-C", cwd }
+    for _, arg in ipairs(args) do table.insert(argv, arg) end
+    tern.process.run(argv, { timeout_ms = 120000 }, function(result, nextCx)
+        if not nextCx or active ~= flow then return end
+        guarded(nextCx, flow, function() callback(nextCx, result) end)
+    end)
+end
+
+local function physicalPath(cx, flow, path, callback)
+    removal.require(type(path) == "string" and path:sub(1, 1) == "/",
+        "无法确认路径是否为本机绝对路径；拒绝移除。")
+    tern.process.run({ "realpath", path }, { timeout_ms = 30000 }, function(result, nextCx)
+        if not nextCx or active ~= flow then return end
+        guarded(nextCx, flow, function()
+            local value = removal.result(result, "realpath 路径解析")
+            callback(nextCx, git.chomp(value))
+        end)
+    end)
+end
+
+local function paneSignature(panes)
+    local rows = {}
+    for _, pane in ipairs(panes) do
+        table.insert(rows, table.concat({
+            tostring(pane.pane), tostring(pane.hostId), tostring(pane.hostKind),
+            tostring(pane.sessionId), tostring(pane.sessionHost),
+            tostring(pane.cwd), tostring(pane.path), tostring(pane.url),
+            tostring(pane.kind), tostring(pane.tab),
+            tostring(pane.floating), tostring(pane.parked),
+        }, "\0"))
+    end
+    table.sort(rows)
+    return table.concat(rows, "\1")
+end
+local function inspectPaneLocations(cx, flow, panes, callback)
+    local locations, fields, paneIndex, fieldIndex = {}, nil, 1, 1
+    local function advance(nextCx)
+        while true do
+            local pane = panes[paneIndex]
+            if not pane then
+                removal.requireNoVisibleUse(flow.reviewRoot, locations)
+                table.sort(locations, function(a, b) return a.key < b.key end)
+                local encoded = {}
+                for _, location in ipairs(locations) do
+                    table.insert(encoded, location.key .. "=" .. location.value)
+                end
+                callback(nextCx, locations, table.concat(encoded, "\n"))
+                return
+            end
+            if not fields then
+                local urlPath
+                if pane.hostKind == "local" and pane.url then
+                    urlPath = removal.fileURLPath(pane.url)
+                end
+                fields = { { "cwd", pane.cwd }, { "path", pane.path }, { "url", urlPath } }
+                removal.requireKnownLocalLocations(pane, { pane.cwd, pane.path, urlPath })
+                fieldIndex = 1
+            end
+            local field = fields[fieldIndex]
+            if not field then
+                paneIndex += 1
+                fields = nil
+            else
+                fieldIndex += 1
+                if pane.hostKind == "local" and field[2] and field[2] ~= "" then
+                    physicalPath(nextCx, flow, field[2], function(realCx, resolved)
+                        table.insert(locations, {
+                            key = tostring(pane.pane) .. ":" .. field[1] .. ":" .. tostring(field[2]),
+                            value = resolved,
+                            path = resolved,
+                        })
+                        advance(realCx)
+                    end)
+                    return
+                end
+            end
+        end
+    end
+    advance(cx)
+end
+
+local function reviewRemoval(cx, flow, selected, callback)
+    local state = { selected = selected, rows = {}, paths = {}, panes = {} }
+    local steps = {}
+    local function step(fn)
+        table.insert(steps, fn)
+    end
+    local function command(key, cwd, args, label, optional)
+        step(function(currentCx, next)
+            if type(cwd) == "function" then cwd = cwd() end
+            if type(args) == "function" then args = args() end
+            removalRun(currentCx, flow, cwd, args, function(resultCx, result)
+                if optional and result.status == optional.status then
+                    removal.require(not result.timed_out and result.stdout == "" and result.stderr == "",
+                        label .. "无法确认目标状态；拒绝移除。")
+                    state[key] = ""
+                else
+                    state[key] = removal.result(result, label)
+                end
+                next(resultCx)
+            end)
+        end)
+    end
+    command("listing", flow.root, { "worktree", "list", "--porcelain", "-z" }, "Git worktree list")
+    step(function(currentCx, next)
+        removal.require(state.listing == "" or state.listing:sub(-2) == "\0\0",
+            "Git worktree 登记 NUL 输出不完整；拒绝移除。")
+        state.rows = git.worktrees(state.listing)
+        state.mainRoot = state.rows[1] and state.rows[1].path
+        for _, row in ipairs(state.rows) do
+            if row.path == selected.path then state.registered = row end
+        end
+        removal.require(state.registered ~= nil, "目标 worktree 已不再登记；请重新选择。")
+        removal.requireRegistered(state.registered, state.mainRoot)
+        next(currentCx)
+    end)
+    command("targetRoot", selected.path, { "rev-parse", "--show-toplevel" }, "目标 Git root")
+    command("targetCommon", selected.path,
+        { "rev-parse", "--path-format=absolute", "--git-common-dir" }, "目标 Git common-dir")
+    step(function(currentCx, next)
+        state.root, state.common = git.chomp(state.targetRoot), git.chomp(state.targetCommon)
+        state.registered.root, state.registered.commonDir = state.root, state.common
+        removal.requireRemovable(state.registered, state.mainRoot, flow.commonDir)
+        flow.reviewRoot = state.root
+        local locations = {
+            { "target", selected.path, state.root },
+            { "common", state.common, flow.commonDir },
+        }
+        local index = 1
+        local function resolve(nextCx)
+            local item = locations[index]
+            if not item then
+                local rowIndex = 1
+                local function resolveRows(rowCx)
+                    local row = state.rows[rowIndex]
+                    if not row then
+                        local physicalRows = {}
+                        for _, registered in ipairs(state.rows) do
+                            table.insert(physicalRows, {
+                                path = state.paths[registered.path] or registered.path,
+                            })
+                        end
+                        removal.requireNoNested(state.root, state.common, physicalRows)
+                        next(rowCx)
+                        return
+                    end
+                    rowIndex += 1
+                    if not tern.fs.exists(row.path) then
+                        removal.require(row.path ~= selected.path and row.prunable,
+                            "其他 worktree 登记路径不存在且身份无法确认；拒绝移除。")
+                        state.paths[row.path] = row.path
+                        resolveRows(rowCx)
+                        return
+                    end
+                    physicalPath(rowCx, flow, row.path, function(realCx, physical)
+                        state.paths[row.path] = physical
+                        removal.require(physical == row.path,
+                            "其他 worktree 登记路径的物理身份已变化；拒绝移除。")
+                        if row.path == selected.path then
+                            removal.require(physical == state.root,
+                                "目标登记路径的 realpath 身份已变化；拒绝移除。")
+                        end
+                        resolveRows(realCx)
+                    end)
+                end
+                resolveRows(nextCx)
+                return
+            end
+            index += 1
+            physicalPath(nextCx, flow, item[2], function(realCx, physical)
+                removal.require(physical == item[3],
+                    item[1] == "target"
+                        and "目标 worktree 的实际 root／realpath 与 Git 登记不符；拒绝移除。"
+                        or "目标 worktree 的实际 common-dir 与来源仓库不符；拒绝移除。")
+                resolve(realCx)
+            end)
+        end
+        resolve(currentCx)
+    end)
+    step(function(currentCx, next)
+        local ok, panes = pcall(manager.visiblePanes, currentCx)
+        removal.require(ok, "无法完整枚举本机可见 panes；拒绝移除。")
+        state.panes = panes
+        inspectPaneLocations(currentCx, flow, panes, function(locCx, locations, encoded)
+            state.paneLocations = encoded
+            state.paneSignature = paneSignature(panes)
+            next(locCx)
+        end)
+    end)
+    command("status", function() return state.root end,
+        { "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none" },
+        "Git status")
+    command("ignored", function() return state.root end,
+        { "ls-files", "--others", "--ignored", "--exclude-standard", "-z" }, "Git ignored 文件列表")
+    command("untracked", function() return state.root end,
+        { "ls-files", "--others", "--exclude-standard", "-z" }, "Git untracked 文件列表")
+    command("indexFlags", function() return state.root end,
+        { "ls-files", "-v", "--stage", "-z" }, "Git 索引标记")
+    step(function(currentCx, next)
+        removal.require(state.status == "" or state.status:sub(-1) == "\0",
+            "Git status NUL 输出不完整；拒绝移除。")
+        removal.nulRecords(state.ignored, "Git ignored 文件列表")
+        removal.nulRecords(state.untracked, "Git untracked 文件列表")
+        removal.requireCompleteFiles(state.untracked, state.ignored, state.indexFlags)
+        next(currentCx)
+    end)
+    command("head", function() return state.root end,
+        { "rev-parse", "--verify", "HEAD^{commit}" }, "Git HEAD")
+    command("branch", function() return state.root end,
+        { "symbolic-ref", "--quiet", "HEAD" }, "Git 完整 symbolic-ref", { status = 1 })
+    command("protectedRefs", function() return state.root end, function()
+        return {
+            "for-each-ref", "--contains=" .. git.chomp(state.head),
+            "--format=%(refname)", "refs/heads", "refs/remotes", "refs/tags",
+        }
+    end, "Detached HEAD 保护分支")
+    command("refs", flow.root,
+        { "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)" }, "Git refs")
+    step(function(currentCx, next)
+        state.head = git.chomp(state.head)
+        state.branch = git.chomp(state.branch)
+        local registeredDetached = state.registered.detached == true
+        removal.require(state.registered.head == state.head
+            and registeredDetached == (state.branch == "")
+            and ((registeredDetached and state.branch == "")
+                or (not registeredDetached and state.registered.branch == state.branch)),
+            "Git worktree 登记 HEAD／branch 与实际状态不一致；拒绝移除。")
+        state.protected = {}
+        local refsOutput = state.protectedRefs
+        removal.require(refsOutput == "" or refsOutput:sub(-1) == "\n",
+            "Detached HEAD 保护refs输出不完整；拒绝移除。")
+        for ref in refsOutput:gmatch("[^\r\n]+") do table.insert(state.protected, ref) end
+        removal.validateRefSnapshot(state.refs)
+        next(currentCx)
+    end)
+    step(function(currentCx, next)
+        runGitAt(currentCx, flow, flow.cwd, { "rev-parse", "--show-toplevel" }, function(sourceCx, result)
+            state.sourceRoot = git.chomp(removal.result(result, "来源 Git root"))
+            runGitAt(sourceCx, flow, flow.cwd, {
+                "rev-parse", "--path-format=absolute", "--git-common-dir",
+            }, function(commonCx, commonResult)
+                state.sourceCommon = git.chomp(removal.result(commonResult, "来源 Git common-dir"))
+                removal.require(state.sourceRoot == flow.root and state.sourceCommon == flow.commonDir,
+                    "来源仓库 root 或 common-dir 已变化；拒绝移除。")
+                next(commonCx)
+            end)
+        end)
+    end)
+    step(function(currentCx, next)
+        local panesOk, latest = pcall(manager.visiblePanes, currentCx)
+        removal.require(panesOk and paneSignature(latest) == state.paneSignature,
+            "最终复查期间可见 pane 身份或位置已变化；拒绝移除。")
+        inspectPaneLocations(currentCx, flow, latest, function(locCx, _, locationsText)
+            removal.require(locationsText == state.paneLocations,
+                "最终复查期间可见 pane 物理位置已变化；拒绝移除。")
+            next(locCx)
+        end)
+    end)
+    step(function(currentCx)
+        local snapshot = removal.snapshot(state.registered, state.listing, state.paneLocations,
+            state.head, state.branch, state.status, state.ignored, state.indexFlags, state.refs,
+            state.untracked, state.paneSignature)
+        callback(currentCx, {
+            paneSignature = state.paneSignature,
+            snapshot = snapshot,
+            risks = {
+                worktree = state.registered, head = state.head, symbolicRef = state.branch,
+                status = state.status, untracked = state.untracked, ignored = state.ignored,
+                indexFlags = state.indexFlags, protectedRefs = state.protected,
+                snapshot = snapshot, paneSignature = state.paneSignature,
+            },
+        })
+    end)
+    local function runStep(index, currentCx)
+        local currentStep = steps[index]
+        if currentStep then
+            currentStep(currentCx, function(nextCx) runStep(index + 1, nextCx) end)
+        end
+    end
+    runStep(1, cx)
+end
+
+
+
+local function requireNormalRemoval(review)
+    removal.requireClean(review.risks.status, review.risks.untracked,
+        review.risks.ignored, review.risks.indexFlags)
+    removal.requireProtectedDetached(review.risks.worktree, review.risks.protectedRefs)
+end
+
+local function removeWorktree(cx, flow, worktree)
+    reviewRemoval(cx, flow, worktree, function(reviewCx, before)
+        requireNormalRemoval(before)
+        local function showConfirmation(confirmCx)
+            pick(confirmCx, flow, {
+                placeholder = "确认移除 · 分支保留",
+                items = {
+                    { label = "取消", id = "cancel" },
+                    { label = "查看完整目标路径…", detail = worktree.path, id = "path" },
+                    { label = "确认无外部使用并移除", id = "confirm" },
+                },
+            }, function(itemCx, choice)
+                if choice.id == "cancel" then finish(flow); return end
+                if choice.id == "path" then
+                    prompt(itemCx, flow, {
+                        placeholder = "仅查看完整目标路径；回车返回确认，Esc取消",
+                        value = worktree.path,
+                        action = "返回确认（仅查看）",
+                    }, function(previewCx) showConfirmation(previewCx) end)
+                    return
+                end
+                if choice.id ~= "confirm" then finish(flow); return end
+                reviewRemoval(itemCx, flow, worktree, function(finalCx, after)
+                    requireNormalRemoval(after)
+                    if not removal.sameSnapshot(before.snapshot, after.snapshot) then
+                        fail(finalCx, flow,
+                            "确认期间 worktree、内容、refs 或可见 pane 状态已变化；未移除，请重新检查。")
+                        return
+                    end
+                    local panesOk, currentPanes = pcall(manager.visiblePanes, finalCx)
+                    if not panesOk or paneSignature(currentPanes) ~= after.paneSignature then
+                        fail(finalCx, flow,
+                            "最终复查期间可见 pane 身份或位置已变化；未移除，请重新检查。")
+                        return
+                    end
+                    removalRun(finalCx, flow, flow.root, {
+                        "worktree", "remove", "--", worktree.path,
+                    }, function(doneCx, result)
+                        if result.status ~= 0 then
+                            finish(flow)
+                            doneCx:toast("error", "Kiku：worktree 未移除",
+                                "Git 移除失败；未执行补救或重试。请检查当前登记、目录及 Git 状态。\n"
+                                    .. gitError(result))
+                            return
+                        end
+                        removalRun(doneCx, flow, flow.root, {
+                            "worktree", "list", "--porcelain", "-z",
+                        }, function(checkCx, checkResult)
+                            local output = removal.result(checkResult, "移除后的 Git worktree list")
+                            removal.require(output == "" or output:sub(-2) == "\0\0",
+                                "Git 移除后登记 NUL 输出不完整；请手动核查结果。")
+                            local remains = false
+                            for _, row in ipairs(git.worktrees(output)) do
+                                if row.path == worktree.path then remains = true end
+                            end
+                            removal.require(not remains and not tern.fs.exists(worktree.path),
+                                "Git 已返回成功，但未能确认目标目录与登记均已移除；请手动核查。")
+                            finish(flow)
+                            checkCx:toast("success", "worktree 已移除，分支已保留", worktree.path)
+                        end)
+                    end)
+                end)
+            end)
+        end
+        showConfirmation(reviewCx)
     end)
 end
 
@@ -707,6 +1067,7 @@ manage = function(cx)
                                 items = {
                                     { label = "打开／切换", id = "open" },
                                     { label = "关闭工作环境", id = "close" },
+                                    { label = "正常移除 worktree", id = "remove" },
                                 },
                             }, function(actionCx, action)
                                 flow.action = action.id
@@ -721,8 +1082,15 @@ manage = function(cx)
                                     local selected = flow.selectedWorktree
                                     if not current or current.head ~= selected.head
                                         or current.branch ~= selected.branch or current.detached ~= selected.detached
-                                        or current.bare ~= selected.bare then
+                                        or current.bare ~= selected.bare or current.locked ~= selected.locked
+                                        or current.lockReason ~= selected.lockReason
+                                        or current.prunable ~= selected.prunable
+                                        or current.prunableReason ~= selected.prunableReason then
                                         fail(refreshCx, flow, "所选工作树登记或身份已变化；请重新选择。")
+                                        return
+                                    end
+                                    if action.id == "remove" then
+                                        removeWorktree(refreshCx, flow, current)
                                         return
                                     end
                                     openWorktree(refreshCx, flow, current)
