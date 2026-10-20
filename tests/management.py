@@ -32,9 +32,20 @@ def _candidate_picker(h):
     )["picker"]
 
 
+def _has_rendered_text(node, message):
+    if isinstance(node, dict):
+        text = node.get("text")
+        if isinstance(text, str) and message in text:
+            return True
+        return any(_has_rendered_text(value, message) for value in node.values())
+    if isinstance(node, list):
+        return any(_has_rendered_text(value, message) for value in node)
+    return False
+
+
 def _wait_management_rejection(h, message):
     return h.wait_for(
-        lambda _state: message in json.dumps(h.ctl("tree"), ensure_ascii=False),
+        lambda state: not state["picker"] and _has_rendered_text(h.ctl("tree"), message),
         "management rejection: " + message,
     )
 

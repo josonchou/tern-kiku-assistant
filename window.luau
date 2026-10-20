@@ -230,9 +230,12 @@ local function reviewRemoval(cx, flow, selected, callback)
     command("targetRoot", selected.path, { "rev-parse", "--show-toplevel" }, "目标 Git root")
     command("targetCommon", selected.path,
         { "rev-parse", "--path-format=absolute", "--git-common-dir" }, "目标 Git common-dir")
+    command("targetGitDir", selected.path,
+        { "rev-parse", "--absolute-git-dir" }, "目标 Git private-dir")
     step(function(currentCx, next)
         state.root, state.common = git.chomp(state.targetRoot), git.chomp(state.targetCommon)
         state.registered.root, state.registered.commonDir = state.root, state.common
+        state.gitDir = git.chomp(state.targetGitDir)
         removal.requireRemovable(state.registered, state.mainRoot, flow.commonDir)
         flow.reviewRoot = state.root
         local locations = {
@@ -291,6 +294,39 @@ local function reviewRemoval(cx, flow, selected, callback)
         resolve(currentCx)
     end)
     step(function(currentCx, next)
+        physicalPath(currentCx, flow, state.gitDir, function(gitCx, physicalGitDir)
+            state.gitDir = physicalGitDir
+            removal.requirePrivateGitDir(state.common, state.gitDir)
+            local pointerFile = state.gitDir .. "/gitdir"
+            physicalPath(gitCx, flow, pointerFile, function(pointerCx, physicalPointerFile)
+                removal.require(physicalPointerFile == pointerFile,
+                    "目标 private Git 目录 backpointer 不能是符号链接；拒绝移除。")
+                local readOk, backpointer = pcall(tern.fs.read, pointerFile, 4096)
+                removal.require(readOk and type(backpointer) == "string" and backpointer ~= ""
+                    and not backpointer:find("%z"),
+                    "目标 private Git 目录 backpointer 文件无法安全读取；拒绝移除。")
+                local backpointerPath = git.chomp(backpointer)
+                removal.require(backpointerPath ~= "" and not backpointerPath:find("%z"),
+                    "目标 private Git 目录 backpointer 格式无法确认；拒绝移除。")
+                if backpointerPath:sub(1, 1) ~= "/" then
+                    backpointerPath = state.gitDir .. "/" .. backpointerPath
+                end
+                physicalPath(pointerCx, flow, backpointerPath, function(backpointerCx, physicalBackpointer)
+                    physicalPath(backpointerCx, flow, selected.path .. "/.git", function(dotGitCx, physicalDotGit)
+                        removal.require(physicalBackpointer == physicalDotGit,
+                            "目标 private Git 目录 backpointer 与 worktree 登记路径不符；拒绝移除。")
+                        state.registered.gitDir = state.gitDir
+                        local listOk, entries = pcall(tern.fs.list, state.gitDir)
+                        removal.require(listOk and type(entries) == "table",
+                            "请先保存内容，再手动完成或中止相关操作；无法确认未完成Git操作目录状态，拒绝移除。")
+                        state.gitDirEntries = entries
+                        next(dotGitCx)
+                    end)
+                end)
+            end)
+        end)
+    end)
+    step(function(currentCx, next)
         local ok, panes = pcall(manager.visiblePanes, currentCx)
         removal.require(ok, "无法完整枚举本机可见 panes；拒绝移除。")
         state.panes = panes
@@ -327,8 +363,9 @@ local function reviewRemoval(cx, flow, selected, callback)
             "--format=%(refname)", "refs/heads", "refs/remotes", "refs/tags",
         }
     end, "Detached HEAD 保护分支")
-    command("refs", flow.root,
-        { "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)" }, "Git refs")
+    command("refs", function() return state.root end,
+        { "for-each-ref", "--include-root-refs", "--format=%(refname)%00%(objectname)%00%(symref)" },
+        "Git refs（包含根引用）")
     step(function(currentCx, next)
         state.head = git.chomp(state.head)
         state.branch = git.chomp(state.branch)
@@ -343,7 +380,7 @@ local function reviewRemoval(cx, flow, selected, callback)
         removal.require(refsOutput == "" or refsOutput:sub(-1) == "\n",
             "Detached HEAD 保护refs输出不完整；拒绝移除。")
         for ref in refsOutput:gmatch("[^\r\n]+") do table.insert(state.protected, ref) end
-        removal.validateRefSnapshot(state.refs)
+        removal.requireNoPendingOperation(state.gitDirEntries, state.refs)
         next(currentCx)
     end)
     step(function(currentCx, next)
@@ -401,48 +438,97 @@ local function requireNormalRemoval(review)
     removal.requireProtectedDetached(review.risks.worktree, review.risks.protectedRefs)
 end
 
-local function removeWorktree(cx, flow, worktree)
-    reviewRemoval(cx, flow, worktree, function(reviewCx, before)
-        requireNormalRemoval(before)
-        local function showConfirmation(confirmCx)
-            pick(confirmCx, flow, {
-                placeholder = "确认移除 · 分支保留",
-                items = {
-                    { label = "取消", id = "cancel" },
-                    { label = "查看完整目标路径…", detail = worktree.path, id = "path" },
-                    { label = "确认无外部使用并移除", id = "confirm" },
-                },
-            }, function(itemCx, choice)
-                if choice.id == "cancel" then finish(flow); return end
-                if choice.id == "path" then
-                    prompt(itemCx, flow, {
-                        placeholder = "仅查看完整目标路径；回车返回确认，Esc取消",
-                        value = worktree.path,
-                        action = "返回确认（仅查看）",
-                    }, function(previewCx) showConfirmation(previewCx) end)
-                    return
+local function dangerousRiskItems(review)
+    local risks = review.risks
+    local statusRecords = removal.nulRecords(risks.status, "Git status")
+    local untrackedRecords = removal.nulRecords(risks.untracked, "Git untracked 文件列表")
+    local ignoredRecords = removal.nulRecords(risks.ignored, "Git ignored 文件列表")
+    local total = #untrackedRecords + #ignoredRecords
+    local index = 1
+    while index <= #statusRecords do
+        local record = statusRecords[index]
+        removal.require(#record >= 4 and record:sub(3, 3) == " ",
+            "Git status 记录不完整；拒绝移除。")
+        local code, path = record:sub(1, 2), record:sub(4)
+        removal.require(path ~= "", "Git status 路径为空；拒绝移除。")
+        if code ~= "??" then
+            total += 1
+            if code:find("R", 1, true) or code:find("C", 1, true) then
+                index += 1
+                removal.require(type(statusRecords[index]) == "string" and statusRecords[index] ~= "",
+                    "Git status rename/copy 双路径记录不完整；拒绝移除。")
+                total += 1
+            end
+        end
+        index += 1
+    end
+    if risks.worktree.detached and #risks.protectedRefs == 0 then total += 1 end
+
+    local limit = 40
+    local truncated = total > limit
+    local visibleLimit = truncated and limit - 1 or limit
+    local items = {}
+    local function add(label)
+        if #items < visibleLimit then
+            table.insert(items, { label = label, id = "risk", riskText = label })
+        end
+    end
+    if total == 0 then
+        add("未发现可丢弃的本地文件或提交风险")
+    else
+        index = 1
+        while index <= #statusRecords do
+            local record = statusRecords[index]
+            local code, path = record:sub(1, 2), record:sub(4)
+            if code ~= "??" then
+                add("已修改文件（" .. code .. "）：" .. path)
+                if code:find("R", 1, true) or code:find("C", 1, true) then
+                    index += 1
+                    add("原始路径：" .. statusRecords[index])
                 end
-                if choice.id ~= "confirm" then finish(flow); return end
-                reviewRemoval(itemCx, flow, worktree, function(finalCx, after)
-                    requireNormalRemoval(after)
+            end
+            index += 1
+        end
+        for _, path in ipairs(untrackedRecords) do
+            add("未跟踪文件：" .. path)
+        end
+        for _, path in ipairs(ignoredRecords) do
+            add("忽略文件：" .. path)
+        end
+        if risks.worktree.detached and #risks.protectedRefs == 0 then
+            add("未受分支或标签保护的 Detached 提交：" .. risks.head)
+        end
+    end
+    return { items = items, total = total, truncated = truncated }
+end
+
+local function removeWorktree(cx, flow, worktree, dangerous)
+    reviewRemoval(cx, flow, worktree, function(reviewCx, before)
+        if not dangerous then requireNormalRemoval(before) end
+        local function removeAfterReview(confirmCx)
+            local function finalReview(finalCx)
+                reviewRemoval(finalCx, flow, worktree, function(reviewCx, after)
+                    if not dangerous then requireNormalRemoval(after) end
                     if not removal.sameSnapshot(before.snapshot, after.snapshot) then
-                        fail(finalCx, flow,
+                        fail(reviewCx, flow,
                             "确认期间 worktree、内容、refs 或可见 pane 状态已变化；未移除，请重新检查。")
                         return
                     end
-                    local panesOk, currentPanes = pcall(manager.visiblePanes, finalCx)
+                    local panesOk, currentPanes = pcall(manager.visiblePanes, reviewCx)
                     if not panesOk or paneSignature(currentPanes) ~= after.paneSignature then
-                        fail(finalCx, flow,
+                        fail(reviewCx, flow,
                             "最终复查期间可见 pane 身份或位置已变化；未移除，请重新检查。")
                         return
                     end
-                    removalRun(finalCx, flow, flow.root, {
-                        "worktree", "remove", "--", worktree.path,
-                    }, function(doneCx, result)
+                    local args = { "worktree", "remove" }
+                    if dangerous then table.insert(args, "--force") end
+                    table.insert(args, "--")
+                    table.insert(args, worktree.path)
+                    removalRun(reviewCx, flow, flow.root, args, function(doneCx, result)
                         if result.status ~= 0 then
                             finish(flow)
-                            doneCx:toast("error", "Kiku：worktree 未移除",
-                                "Git 移除失败；未执行补救或重试。请检查当前登记、目录及 Git 状态。\n"
+                            doneCx:toast("error", "Kiku：worktree 移除失败",
+                                "Git 移除失败；目录或登记可能已部分移除，请手动核查。未执行补救或重试。\n"
                                     .. gitError(result))
                             return
                         end
@@ -463,9 +549,123 @@ local function removeWorktree(cx, flow, worktree)
                         end)
                     end)
                 end)
+            end
+            finalReview(confirmCx)
+        end
+        if not dangerous then
+            local function showConfirmation(confirmCx)
+                pick(confirmCx, flow, {
+                    placeholder = "确认移除 · 分支保留",
+                    items = {
+                        { label = "取消", id = "cancel" },
+                        { label = "查看完整目标路径…", detail = worktree.path, id = "path" },
+                        { label = "确认无外部使用并移除", id = "confirm" },
+                    },
+                }, function(itemCx, choice)
+                    if choice.id == "cancel" then finish(flow); return end
+                    if choice.id == "path" then
+                        prompt(itemCx, flow, {
+                            placeholder = "仅查看完整目标路径；回车返回确认，Esc取消",
+                            value = worktree.path,
+                            action = "返回确认（仅查看）",
+                        }, function(previewCx) showConfirmation(previewCx) end)
+                        return
+                    end
+                    if choice.id == "confirm" then removeAfterReview(itemCx)
+                    else finish(flow) end
+                end)
+            end
+            showConfirmation(reviewCx)
+            return
+        end
+
+        local riskPreview = dangerousRiskItems(before)
+        local riskMenuItems = {
+            { label = "取消", id = "cancel" },
+        }
+        if riskPreview.truncated then
+            table.insert(riskMenuItems, {
+                label = "风险清单已截断；未展示项也会被丢弃（共 "
+                    .. tostring(riskPreview.total) .. " 项）",
+                id = "notice",
+            })
+        end
+        for _, item in ipairs(riskPreview.items) do table.insert(riskMenuItems, item) end
+        table.insert(riskMenuItems, {
+            label = "查看完整目标路径…",
+            detail = worktree.path,
+            id = "path_preview",
+        })
+        table.insert(riskMenuItems, {
+            label = "继续：输入完整目标路径",
+            id = "enter_path",
+        })
+
+        local function showRiskPreview(previewCx)
+            pick(previewCx, flow, {
+                placeholder = "危险移除将丢弃目标内全部本地内容，包括未展示风险",
+                items = riskMenuItems,
+            }, function(itemCx, choice)
+                if choice.id == "cancel" then finish(flow); return end
+                if choice.id == "notice" then showRiskPreview(itemCx); return end
+                if choice.id == "risk" then
+                    prompt(itemCx, flow, {
+                        placeholder = "只读风险项展示；编辑不会授权，回车返回预览，Esc取消",
+                        value = choice.riskText,
+                        action = "返回风险预览",
+                    }, function(returnCx) showRiskPreview(returnCx) end)
+                    return
+                end
+                if choice.id == "path_preview" then
+                    prompt(itemCx, flow, {
+                        placeholder = "只读路径预览；返回后仍需输入完整路径确认",
+                        value = worktree.path,
+                        action = "返回风险预览",
+                    }, function(returnCx) showRiskPreview(returnCx) end)
+                    return
+                end
+                if choice.id ~= "enter_path" then
+                    finish(flow)
+                    return
+                end
+                local function enterPath(pathCx)
+                    prompt(pathCx, flow, {
+                        placeholder = "重新输入完整目标路径；Esc取消",
+                        value = "",
+                        action = "确认完整路径",
+                    }, function(typedCx, typedPath)
+                        if typedPath ~= worktree.path then
+                            pick(typedCx, flow, {
+                                placeholder = "输入路径与目标不符",
+                                items = {
+                                    { label = "取消", id = "cancel" },
+                                    { label = "重新输入完整路径", id = "retry" },
+                                },
+                            }, function(retryCx, correction)
+                                if correction.id == "retry" then enterPath(retryCx)
+                                else finish(flow) end
+                            end)
+                            return
+                        end
+                        pick(typedCx, flow, {
+                            placeholder = "确认无外部环境仍在使用目标",
+                            items = {
+                                { label = "取消", id = "cancel" },
+                                { label = "确认无外部使用并危险移除", id = "confirm" },
+                            },
+                        }, function(externalCx, confirmation)
+                            if confirmation.id == "confirm" then
+                                removeAfterReview(externalCx)
+                            else
+                                finish(flow)
+                            end
+                        end)
+                    end)
+                end
+                enterPath(itemCx)
             end)
         end
-        showConfirmation(reviewCx)
+        if dangerous then showRiskPreview(reviewCx) end
     end)
 end
 
@@ -1068,6 +1268,7 @@ manage = function(cx)
                                     { label = "打开／切换", id = "open" },
                                     { label = "关闭工作环境", id = "close" },
                                     { label = "正常移除 worktree", id = "remove" },
+                                    { label = "危险移除 worktree", id = "dangerous_remove" },
                                 },
                             }, function(actionCx, action)
                                 flow.action = action.id
@@ -1089,8 +1290,8 @@ manage = function(cx)
                                         fail(refreshCx, flow, "所选工作树登记或身份已变化；请重新选择。")
                                         return
                                     end
-                                    if action.id == "remove" then
-                                        removeWorktree(refreshCx, flow, current)
+                                    if action.id == "remove" or action.id == "dangerous_remove" then
+                                        removeWorktree(refreshCx, flow, current, action.id == "dangerous_remove")
                                         return
                                     end
                                     openWorktree(refreshCx, flow, current)

@@ -41,7 +41,7 @@ def _checkout_contents(root):
     visit(root)
     return contents
 
-def _select_remove(h, target, source=None):
+def _select_remove(h, target, source=None, action="正常移除 worktree"):
     source = source or h.repo
     for pane in h.lua_json("cx.session:panes()"):
         if (pane.get("kind") == "terminal" and pane.get("cwd") == str(source)
@@ -51,7 +51,7 @@ def _select_remove(h, target, source=None):
             break
     else:
         h.open_repo(source)
-    _select_worktree(h, target, action="正常移除 worktree")
+    _select_worktree(h, target, action=action)
 
 def _expect_rejection(h, target, message, expected_exists=True):
     _select_remove(h, target)
@@ -482,6 +482,7 @@ def run(h):
         "return cx.layout:split(" + str(source_pane) + ", 'right', {cwd="
         + json.dumps(str(opened_subdir)) + "})"
     ))
+    h.type_text("确认无外部使用并移除")
     h.picker(selected="确认无外部使用并移除")
     h.ctl("picker enter")
     _wait_management_rejection(h, "正在使用目标 worktree")
@@ -527,12 +528,21 @@ def run(h):
     index_path = git_dir / "index"
     original_index = index_path.read_bytes()
     original_readme = (failed / "README.md").read_bytes()
+    failed_registrations = _registrations(h)
+    failed_refs = h.git("for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)")
     index_path.write_bytes(b"not a git index")
     h.type_text("确认无外部使用并移除")
     h.picker(selected="确认无外部使用并移除")
     h.ctl("picker enter")
-    _wait_management_rejection(h, "Git status 失败")
+    _wait_management_rejection(h, "Git")
     assert failed.is_dir() and (failed / "README.md").read_bytes() == original_readme
+    assert index_path.read_bytes() == b"not a git index"
+    assert _registrations(h) == failed_registrations
+    assert h.git("for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)") == failed_refs
     index_path.write_bytes(original_index)
+    _select_remove(h, failed)
+    h.picker(selected="取消")
+    h.ctl("picker esc")
+    h.wait_for(lambda state: not state["picker"], "cancel a new attempt after Git rejection")
     _remove_fixture(h, failed)
     h.record("real Git status failure preserves the checkout without a force retry")

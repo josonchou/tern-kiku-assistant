@@ -2,6 +2,27 @@
 local M = {}
 local OUTPUT_LIMIT = 16 * 1024 * 1024
 
+local pendingOperationMarkers = {
+    ["MERGE_HEAD"] = true,
+    ["MERGE_AUTOSTASH"] = true,
+    ["MERGE_MSG"] = true,
+    ["MERGE_MODE"] = true,
+    ["AUTO_MERGE"] = true,
+    ["SQUASH_MSG"] = true,
+    ["CHERRY_PICK_HEAD"] = true,
+    ["REVERT_HEAD"] = true,
+    ["REBASE_HEAD"] = true,
+    ["rebase-apply"] = true,
+    ["rebase-merge"] = true,
+    ["sequencer"] = true,
+    ["BISECT_LOG"] = true,
+    ["BISECT_START"] = true,
+    ["BISECT_NAMES"] = true,
+    ["BISECT_EXPECTED_REV"] = true,
+    ["BISECT_TERMS"] = true,
+    ["BISECT_RUN"] = true,
+}
+
 local function requireSafe(condition, message)
     if not condition then error(message, 0) end
 end
@@ -36,12 +57,34 @@ function M.nulRecords(output, label)
 end
 
 function M.validateRefSnapshot(output)
-    if output == "" then return end
-    requireSafe(output:sub(-1) == "\n", "Git refs 输出不完整；拒绝移除。")
+    if output == "" then return nil end
+    requireSafe(output:sub(-1) == "\n",
+        "请先保存内容，再手动完成或中止相关操作；Git refs 输出不完整，拒绝移除。")
+    local marker
     for line in output:gmatch("([^\n]*)\n") do
         local ref, oid, symbolic = line:match("^([^%z]+)%z([^%z]+)%z([^%z]*)$")
-        requireSafe(ref and oid and symbolic ~= nil, "Git refs NUL 记录不完整；拒绝移除。")
+        requireSafe(ref and oid and symbolic ~= nil,
+            "请先保存内容，再手动完成或中止相关操作；Git refs NUL 记录不完整，拒绝移除。")
+        if not marker and pendingOperationMarkers[ref] then marker = ref end
     end
+    return marker
+end
+
+function M.requireNoPendingOperation(entries, refs)
+    local unknownState = "请先保存内容，再手动完成或中止相关操作；无法确认未完成Git操作状态，拒绝移除。"
+    requireSafe(type(entries) == "table" and type(refs) == "string", unknownState)
+    local marker
+    for _, entry in ipairs(entries) do
+        requireSafe(type(entry) == "string",
+            "请先保存内容，再手动完成或中止相关操作；无法确认未完成Git操作目录状态，拒绝移除。")
+        if not marker and pendingOperationMarkers[entry] then marker = entry end
+    end
+    local refMarker = M.validateRefSnapshot(refs)
+    if not marker then marker = refMarker end
+    if marker then
+        error("未完成Git操作；请先保存内容，再手动完成或中止。标记：" .. marker, 0)
+    end
+    return true
 end
 
 
@@ -101,6 +144,15 @@ end
 function M.contains(parent, candidate)
     if parent == "/" then return candidate:sub(1, 1) == "/" end
     return candidate == parent or candidate:sub(1, #parent + 1) == parent .. "/"
+end
+
+function M.requirePrivateGitDir(commonDir, gitDir)
+    requireSafe(type(commonDir) == "string" and commonDir:sub(1, 1) == "/"
+        and type(gitDir) == "string" and gitDir:sub(1, 1) == "/",
+        "目标 worktree 的 private Git 目录身份无法确认；拒绝移除。")
+    local worktreesDir = commonDir .. "/worktrees"
+    requireSafe(gitDir ~= worktreesDir and M.contains(worktreesDir, gitDir),
+        "目标 private Git 目录不属于来源仓库的 worktrees 管理目录；拒绝移除。")
 end
 
 function M.requireNoNested(worktreePath, commonDir, registrations)
@@ -181,6 +233,7 @@ function M.snapshot(
         registrations = registrations, paneLocations = paneLocations, headValue = head,
         untracked = untracked or "", paneSignature = paneSignature or "",
         branchValue = branch or "", status = status, ignored = ignored, indexFlags = indexFlags, refs = refs,
+        gitDir = worktree.gitDir or "",
     }
     local result = {}
     for key, value in pairs(values) do table.insert(result, { key = key, value = value }) end
