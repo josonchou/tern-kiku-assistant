@@ -13,7 +13,9 @@ import subprocess
 import tempfile
 import time
 from types import SimpleNamespace
+from dangerous_removal import run as run_dangerous_removal_scenarios
 from management import run as run_management_scenarios
+from pending_removal import run as run_pending_removal_scenarios
 from removal import run as run_removal_scenarios
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -466,6 +468,8 @@ def main():
         )
         run_management_scenarios(harness)
         run_removal_scenarios(harness)
+        run_dangerous_removal_scenarios(harness)
+        run_pending_removal_scenarios(harness)
 
         (PLUGIN / "config.json").write_text(json.dumps({"defaultPath": "", "keybinding": ""}))
         ctl("plugins fixtures")
