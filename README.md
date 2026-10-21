@@ -35,6 +35,8 @@ tern plugin link ~/Workspace/tern-kiku-assistant
 
 **安全模式**：插件重载后，不重新接管旧终端，不自动收起、移动、结束或重跑已有程序；旧实例交由 Tern 原生管理。失败卡片仍保留供查看，但无法确认进程代次时仅由原生关闭。历史标记、旧窗格 ID 或仍存活的 PID 不能单独证明归属；身份未知时，插件即使收到结束请求也只提示并停止。
 
+重载前已收起的旧工具，可在 Tern 原生 **Parked panes**（默认 **Ctrl+Shift+↑**）中选择卡片恢复。这是原生视图恢复，不会重新执行工具启动命令。
+
 插件仅在确认来源属于本机且目录可知时执行本机操作；远程上下文、主机或来源目录未知时拒绝，不把远程路径当成本机路径。配置的可执行程序路径应指向单个可执行文件，而不是 shell 命令；显式路径存在且可执行时优先，未配置、失效或不可执行时回退到本机 `PATH`，并说明实际使用路径；两者均不可用时停用相应功能并说明本机、程序、配置位置及原因。独立的 `realpath` 缺失只影响正常与危险移除，不影响创建、打开或快捷工具。命令面板会按依赖隐藏不可用的启动项；快捷键或直接调用仍会检查依赖并提示，不会先创建终端再报告缺失。
 
 快捷键动作 ID：`plugin.kiku.open_lazygit`、`plugin.kiku.open_terminal`、`plugin.kiku.hide_tool`、`plugin.kiku.end_tool`、`plugin.kiku.restore_tools`。程序路径配置的键为 `executables.git`、`executables.lazygit`、`executables.realpath`。原有 `defaultPath`、`keybinding`、`manageKeybinding` 语义及用户覆盖保持不变；以下配置示例仅展示新增项，不要求覆盖现有用户配置：

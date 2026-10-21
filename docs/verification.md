@@ -122,4 +122,20 @@
 
 `tern-kiku-test-z6g4pw39` 的真实回归证明：恢复扫描将仅展示旧工具 prefix 文本的普通终端误认成工具。后续只读审查确认，数字 PID／精确握手文本仍不能证明候选 pane 与旧进程的绑定。用户明确取消本轮跨重载自动接管，改为旧实例及代次未知的失败卡片交由 Tern 原生管理；此处记录授权边界，不宣称安全模式代码已经验收。
 
-来源关闭探针区分了两条路径：Carly 直接 `cx.layout:close` 未产生所期待的 `pane_closed` 通知；真实来源终端执行 `exit 0` 会产生事件，并在保留完整进程验证的情况下收起原工具、保留任务及同实例恢复。证据分别为 `tern-kiku-test-f_ni9nzw` 与 `tern-kiku-test-oj0hrj7w`。工具回归改为原生用户关闭路径，不通过跳过身份验证或增加等待时间迎合夹具。
+在 `serve`／无 daemon 的来源关闭探针中，Carly `cx.layout:close` 和原生 `Cmd+W` 都未发出所期待的 `pane_closed` 通知；真实来源 shell 执行 `exit 0` 则会产生事件。证据分别为 `tern-kiku-test-f_ni9nzw`、`tern-kiku-test-7idjkmqa` 与 `tern-kiku-test-oj0hrj7w`。这不代表正常 GUI 的全部事件行为；不能只用 `exit 0` 替代原生关闭验收，也不能跳过进程身份验证来收起工具。
+
+安全模式候选的6组原生场景已通过 `tern-kiku-test-_td7qtk_`；原生停放恢复另见 `tern-kiku-test-dbvpp867/native-parked-fallback.json`：重载后旧pane6仍收起、任务PID26803存活，经原生卡片恢复后pane/PID/cwd保持。已查看 `tern-kiku-test-z3pabwwn/shots/serve/native-hand-expanded.png` 的展开卡片。这些记录不替代来源消失观察器与lazygit的最终验收。
+
+随后在独立正常 GUI＋私有 daemon 中，原生 `Cmd+W` 关闭来源后，观察器已将工具 pane9 收起，真实前台任务 PID71910 仍存活。证据：`/tmp/kigu-rwhugdp9/native-close-evidence.json`。同版本 `serve` 的定时回调只在启动阶段触发，不能作为该观察器的验收环境；完整工具生命周期改用独立原生 GUI。GUI 必须处于解锁桌面，锁屏会阻塞渲染相关回调。
+
+Tern 0.9.5 的 daemon 模式另有独立限制：已解锁的全新私有实例中，普通非插件终端 `exit 7` 后，Enter 与官方 `restart` 动作均未启动新 shell，见 `/private/tmp/kign-rcz6p9xf/failure-state.json`。因此 Restart 的进程代次防护保留为独立真实 `serve` 回归，其他生命周期用 GUI 验证；`--tools-only` 必须执行两者，不删除或放宽 Restart 断言。
+
+### 临时终端阶段验收
+
+提交 `5fc44a828bb3396718a85cb969be84d8240e9f85` 已集成。macOS / Tern 0.9.5 共通过11组工具场景：
+
+- `tern-kiku-test-onvqrfq8`：正常 GUI＋私有 daemon 的9组生命周期场景，包含真实前台任务保活、同源复用／跨源隔离、结束取消与确认、来源退出、原生 Cmd+W、独立恢复保持、旧记录清理边界、重载后标记及跨会话未知实例拒绝。
+- `tern-kiku-test-64b9nach`：独立 `serve` 的1组 Restart 代次回归；原生重启后的新 shell 不会被旧工具记录打开、收起或结束。
+- `tern-kiku-test-i26qo4z8`：正常 GUI 的1组非本机上下文拒绝；使用 Tern 自带 loopback 宿主，不连接真实 SSH 主机。
+
+上述目录均位于 `/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/`。已查看此前同路径通过场景的原生浮窗图 `tern-kiku-test-xxxnmqib/target/shots/tern/live/scratch-terminal-restored.png`。本阶段不宣称 lazygit、真实远端或 Linux 已验收。

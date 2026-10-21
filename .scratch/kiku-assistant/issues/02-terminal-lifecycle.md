@@ -1,6 +1,6 @@
 # 02 临时终端与完整生命周期
 
-Status: claimed
+Status: resolved
 Type: task
 Blocked by: 01
 Spec: ../spec.md
@@ -27,3 +27,11 @@ Spec: ../spec.md
 
 - 2026-10-21：01 已集成验收，临时终端票据进入实施。阶段A先交付真实原生 red 场景；集成基线 `3ee6da59858bc387b4cc71ca35f77ab34c0c9d8a`。身份方案须由实际进程／宿主生命周期探针证明，不得凭旧 pane ID 接管。
 - 2026-10-21：用户明确选择“安全模式：未知实例交由 Tern 原生管理”，取消本轮跨重载自动接管；无法确认代次的失败卡片也只由原生查看／关闭。原生 red：`tern-kiku-test-z6g4pw39`，普通窗格展示旧 prefix 文本后被恢复扫描误认领；独立安全审查确认仅补数字 PID 或精确命令仍不能证明候选 pane 承载旧进程。不得通过历史标记或仅旧 ID 重新授权。
+
+## Result
+
+- 已集成：`5fc44a828bb3396718a85cb969be84d8240e9f85`，`feat: 增加安全的临时终端生命周期`。
+- 正常原生 GUI＋独立 daemon 的9组场景通过，证据 `tern-kiku-test-onvqrfq8`：实际任务保活、同源复用／跨源隔离、默认取消与确认结束、来源 shell 退出及原生 Cmd+W、独立标签恢复不被再次收起、旧记录不永久阻止新建、重载后标记／跨会话移动均不授予归属。
+- Restart 的真实进程代次防护单独通过无 daemon 的 Tern，证据 `tern-kiku-test-64b9nach`；同版本 daemon 下普通终端也无法完成原生 Restart，不将宿主限制当成插件验证通过。
+- 非本机上下文拒绝通过，证据 `tern-kiku-test-i26qo4z8`：Tern 自带 loopback 宿主下，快捷键与直接动作均提示拒绝，不在本机创建工具；未连接真实 SSH 主机。
+- 已观察原生浮窗截图；测试使用私有配置、socket、daemon、GUI，并清理自己创建的进程，不触及用户日常会话。完整 worktree 回归与 lazygit 双工具组合仍按后续阶段统一验收。
