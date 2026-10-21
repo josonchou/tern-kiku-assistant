@@ -1,6 +1,6 @@
 schema = 1
 id = "kiku"
-name = "Kiku Worktrees"
+name = "Kiku 助手"
 version = "0.1.0"
-description = "Create Git worktrees with a Lazygit-style flow and open them in Tern tabs."
+description = "Manage Git worktrees and use source-pane-following lazygit and scratch terminal tools in Tern."
 window = "window.luau"
