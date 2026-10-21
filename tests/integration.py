@@ -154,10 +154,12 @@ def record(label):
 
 
 def main(dependencies_only=False, tools_only=False, restart_only=False,
-         lazygit_only=False, lazygit_missing=None, lazygit_restart_only=False):
+         lazygit_only=False, lazygit_missing=None, lazygit_restart_only=False,
+         lazygit_non_git_only=False, lazygit_config_errors_only=False):
     global ROOT, SOCKET, REPO, PLUGIN, TERN_BIN, CTL_ENV
     native = None
-    if tools_only or lazygit_only or lazygit_missing:
+    if (tools_only or lazygit_only or lazygit_missing or lazygit_non_git_only
+            or lazygit_config_errors_only):
         native = NativeWindow(ROOT)
         native.check_desktop()
         SOCKET = native.socket
@@ -185,7 +187,7 @@ def main(dependencies_only=False, tools_only=False, restart_only=False,
     configured_tools = ROOT / "configured tools with spaces"
     path_tools = ROOT / "launch PATH"
     if (dependencies_only or tools_only or restart_only or lazygit_only or lazygit_missing
-            or lazygit_restart_only):
+            or lazygit_restart_only or lazygit_non_git_only or lazygit_config_errors_only):
         path_tools.mkdir()
         if dependencies_only:
             system_git = shutil.which("git")
@@ -197,7 +199,8 @@ def main(dependencies_only=False, tools_only=False, restart_only=False,
                 "defaultPath": "", "keybinding": "",
                 "executables": {"git": str(configured_git)},
             }
-        elif lazygit_only or lazygit_restart_only:
+        elif (lazygit_only or lazygit_restart_only or lazygit_non_git_only
+                or lazygit_config_errors_only):
             system_git = shutil.which("git")
             system_lazygit = shutil.which("lazygit")
             assert system_git and system_lazygit, "Git and lazygit are required for this real TUI scenario"
@@ -299,7 +302,7 @@ def main(dependencies_only=False, tools_only=False, restart_only=False,
                 time.sleep(0.1)
         ctl("plugins run reload_plugins" if native else "plugins fixtures")
         if (dependencies_only or tools_only or restart_only or lazygit_only or lazygit_missing
-                or lazygit_restart_only):
+                or lazygit_restart_only or lazygit_non_git_only or lazygit_config_errors_only):
             scenario_ctl = ctl
             if native:
                 scenario_ctl = lambda command: (
@@ -326,6 +329,20 @@ def main(dependencies_only=False, tools_only=False, restart_only=False,
                 from lazygit import run_restart as run_lazygit_restart
                 run_lazygit_restart(harness)
                 (ROOT / "lazygit-restart-report.json").write_text(json.dumps(
+                    {"passed": passed, "count": len(passed), "artifacts": str(ROOT)},
+                    ensure_ascii=False, indent=2,
+                ))
+            elif lazygit_non_git_only:
+                from lazygit import run_non_git
+                run_non_git(harness)
+                (ROOT / "lazygit-non-git-report.json").write_text(json.dumps(
+                    {"passed": passed, "count": len(passed), "artifacts": str(ROOT)},
+                    ensure_ascii=False, indent=2,
+                ))
+            elif lazygit_config_errors_only:
+                from lazygit import run_config_errors
+                run_config_errors(harness)
+                (ROOT / "lazygit-config-errors-report.json").write_text(json.dumps(
                     {"passed": passed, "count": len(passed), "artifacts": str(ROOT)},
                     ensure_ascii=False, indent=2,
                 ))
@@ -683,6 +700,10 @@ if __name__ == "__main__":
         subprocess.run([sys.executable, str(Path(__file__).resolve()),
                         "--lazygit-restart-only"], check=True)
         main(lazygit_only=True)
+    elif "--lazygit-non-git-only" in arguments:
+        main(lazygit_non_git_only=True)
+    elif "--lazygit-config-errors-only" in arguments:
+        main(lazygit_config_errors_only=True)
     elif "--lazygit-missing-git-only" in arguments:
         main(lazygit_missing="git")
     elif "--lazygit-missing-lazygit-only" in arguments:

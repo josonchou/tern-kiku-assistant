@@ -1371,4 +1371,4 @@ tern.command({
     available = function() return executables:ready("git") end,
     run = function(cx) startWithGit(cx, { "git", "realpath" }, manage) end,
 })
-toolsModule.register(config, executables)
+toolsModule.register(config, executables, configError)

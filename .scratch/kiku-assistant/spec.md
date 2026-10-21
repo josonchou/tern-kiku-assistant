@@ -27,7 +27,7 @@ Status: ready-for-agent
 
 - 配置由新 `lib/config.luau` 统一读取：保留原三字段，新增字符串 `lazygitKeybinding`、`terminalKeybinding`、`hideToolKeybinding`、`endToolKeybinding`，默认分别为 `ctrl+b>alt+g`、`ctrl+b>t`、`ctrl+b>q`、`ctrl+b>shift+q`；新增 `executables = { git = "", lazygit = "", realpath = "" }`。未提供字段采用默认，不要求改用户 config.json；未知字段和错误类型保持明确错误。
 - 本机依赖解析模块 `lib/executables.luau` 提供小型 interface：`new(paths)` 得到实例；`ready(name)` 同步读取已知可用性；`check(cx, names, callback)` 异步验证并以 fresh cx 回调 `(cx, result, err)`，result 含 `paths`、`pathEnv` 和 `fallbacks`，不足的工具不得伪装成功；`refresh(cx)` 更新用于入口显示的状态。如真实 SDK 调查要求微调，先向集成负责人说明，不建立第二套解析器。
-- 新工具在 `lib/tools.luau` 集中处理实例、布局和生命周期，通过 `register(config, executables)` 由 window.luau 接入；动作 ID 为 `open_terminal`、`open_lazygit`、`hide_tool`、`end_tool`、`restore_tools`。02先实现完整临时终端路径；03再接入真实 lazygit，不显示尚未实现的占位动作。
+- 新工具在 `lib/tools.luau` 集中处理实例、布局和生命周期，通过 `register(config, executables, configError)` 由 window.luau 接入；配置错误仅拒绝新工具创建，不影响已确认实例管理。动作 ID 为 `open_terminal`、`open_lazygit`、`hide_tool`、`end_tool`、`restore_tools`。02先实现完整临时终端路径；03再接入真实 lazygit，不显示尚未实现的占位动作。
 - 现有 Git helper 保留 flow、timeout、异步回调守卫和安全参数，不重新发明 worktree 流程。稳定 exported manager/removal/worktree 符号尽量不变；若必须变动先查引用。
 
 ## TDD 与验收接口

@@ -73,6 +73,9 @@ def open_real_lazygit(h):
     return opened
 
 def run(h):
+    from management import _has_error_alert
+    from tools import _has_info_toast
+
     private_config = h.root / "lazygit config"
     private_config.mkdir(parents=True, exist_ok=True)
     (private_config / "config.yml").write_text("disableStartupPopups: true\n")
@@ -253,23 +256,7 @@ def run(h):
     h.wait_for(lambda _: h.lua_json(f"cx.session:pane({fallback_open['pane']})") is None,
                "PATH-fallback lazygit exits normally")
     h.record("invalid executable config uses both isolated PATH wrappers, which execute the real tools")
-    from management import _has_error_alert
-    from tools import _has_info_toast
-    non_git = h.root / "non-Git lazygit source with spaces"
-    non_git.mkdir()
-    h.open_repo(non_git)
-    non_git_source = h.lua_json('cx.session:pane("@focused")')
-    pane_set = {pane["pane"] for pane in h.lua_json("cx.session:panes()")}
-    h.ctl("key ctrl+b")
-    h.ctl("key alt+g")
-    h.wait_for(lambda _: _has_error_alert(h.ctl("tree")),
-               "non-Git lazygit source reports an error before creating a pane")
-    assert {pane["pane"] for pane in h.lua_json("cx.session:panes()")} == pane_set
-    assert not (non_git / ".git").exists()
-    assert h.lua_json(f"cx.session:pane({non_git_source['pane']})")
-    h.record("non-Git source refuses lazygit without creating a pane or initializing a repository")
-    h.wait_for(lambda _: not _has_error_alert(h.ctl("tree")),
-               "non-Git refusal clears before subsequent lifecycle scenarios")
+    run_non_git(h, str(h.path_tools / "lazygit"))
 
     h.open_repo(h.repo)
     orphan_source = h.lua_json('cx.session:pane("@focused")')
@@ -504,6 +491,91 @@ def run(h):
                "explicit end removes the confirmed lazygit bridge")
     h.record("verified lazygit can hide, restore and end after its launch executable disappears")
 
+def run_non_git(h, expected_wrapper=None):
+
+    private_config = h.root / "lazygit config"
+    private_config.mkdir(parents=True, exist_ok=True)
+    (private_config / "config.yml").write_text("disableStartupPopups: true\n")
+    source_path = h.root / "non-git source"
+    source_path.mkdir()
+    h.open_repo(source_path)
+    source = h.lua_json('cx.session:pane("@focused")')
+    before = {pane["pane"] for pane in h.lua_json("cx.session:panes()")}
+    configured = json.loads((h.plugin / "config.json").read_text())
+    lazygit_log = h.root / "lazygit executable invocations"
+    launches_before = len(lazygit_launches(lazygit_log))
+    if expected_wrapper is None:
+        expected_wrapper = configured["executables"]["lazygit"]
+    keybinding = configured.get("lazygitKeybinding") or "ctrl+b>alt+g"
+    for chord in keybinding.split(">"):
+        h.ctl("key " + chord)
+
+    opened = {}
+
+    def non_git_lazygit_opened(_state):
+        panes = h.lua_json("cx.session:panes()")
+        new = [pane for pane in panes if pane["pane"] not in before]
+        if not new:
+            return False
+        assert len(new) == 1, panes
+        pane = new[0]
+        assert pane.get("kind") == "terminal", pane
+        if pane.get("floating") is not True or pane.get("focused") is not True:
+            return False
+        opened.update(pane)
+        return True
+
+    h.wait_for(non_git_lazygit_opened, "lazygit starts in a non-Git source directory")
+    assert opened["cwd"] == source["cwd"] == str(source_path), (source, opened)
+    assert opened["tab"] == source["tab"], (source, opened)
+    assert not (source_path / ".git").exists(), "plugin initialized a repository"
+    h.wait_for(lambda _: len(lazygit_launches(lazygit_log)) > launches_before,
+               "non-Git source starts the real lazygit process")
+    launches = lazygit_launches(lazygit_log)[launches_before:]
+    assert [path for path, _ in launches] == [expected_wrapper], launches
+    assert process_alive(launches[0][1]), launches
+    end_tool(h, opened["pane"])
+    h.wait_for(lambda _: not process_alive(launches[0][1]),
+               "confirmed plugin end stops the real lazygit process")
+    assert not (source_path / ".git").exists(), "plugin initialized a repository"
+    h.record("real lazygit starts from a non-Git source without initializing a repository")
+def run_config_errors(h):
+    from management import _has_error_alert
+
+    cases = (
+        ("unknown field", {"reviewOnlyUnknownKey": True}),
+        ("invalid type", {"terminalKeybinding": False}),
+    )
+    for case_name, invalid_config in cases:
+        for action in ("open_terminal", "open_lazygit"):
+            (h.plugin / "config.json").write_text(json.dumps(invalid_config))
+            h.ctl("plugins fixtures")
+            source_path = h.root / f"config error {case_name} {action}"
+            source_path.mkdir()
+            h.open_repo(source_path)
+            before_panes = {pane["pane"] for pane in h.lua_json("cx.session:panes()")}
+            before_launches = len(lazygit_launches(h.root / "lazygit executable invocations"))
+            keybinding = "ctrl+b>t" if action == "open_terminal" else "ctrl+b>alt+g"
+            for chord in keybinding.split(">"):
+                h.ctl("key " + chord)
+
+            alert = {}
+
+            def config_rejection(_state):
+                tree = h.ctl("tree")
+                if not _has_error_alert(tree):
+                    return False
+                alert["tree"] = tree
+                return True
+
+            h.wait_for(config_rejection, f"{case_name} rejects {action} with a visible error")
+            message = json.dumps(alert["tree"], ensure_ascii=False)
+            assert "配置" in message or "config" in message.lower(), message
+            assert {pane["pane"] for pane in h.lua_json("cx.session:panes()")} == before_panes, \
+                f"{case_name} {action} created a tool pane"
+            assert len(lazygit_launches(h.root / "lazygit executable invocations")) == before_launches, \
+                f"{case_name} {action} launched lazygit"
+    h.record("invalid config rejects both new tool actions before pane or lazygit launch")
 
 def run_restart(h):
     from management import _has_error_alert

@@ -3,6 +3,7 @@ local identity = require("./tool_identity")
 local lazygitLaunch = require("./lazygit_launch")
 local M = {}
 local executables
+local configError
 local tools = {}
 local byPane = {}
 local pending = {}
@@ -111,26 +112,38 @@ local function focusTool(cx, tool, source, done)
         if not previous then display(targetCx, focused); return end
         verifyManaged(targetCx, previous, function(previousVerified, previousCx)
             if not previousCx then complete(); return end
+            local currentPrevious = liveTool(previousCx, previous)
             if previousCx.session:focused() ~= focused or tools[tool.key] ~= tool
                 or byPane[tool.pane] ~= tool or tools[previous.key] ~= previous
-                or byPane[previous.pane] ~= previous then complete(); return end
+                or byPane[previous.pane] ~= previous or not sourcePane(previousCx, source.pane) then
+                complete()
+                return
+            end
             if not previousVerified then
                 previousCx:toast("error", "当前工具身份未确认", "未切换或收起任何窗格。")
                 complete()
                 return
             end
+            if not currentPrevious or currentPrevious.exited ~= nil or currentPrevious.parked == true then
+                previousCx:toast("error", "当前工具状态已变化", "未收起任何窗格。")
+                complete()
+                return
+            end
+            local ok, err = previousCx.layout:park(previous.pane)
+            if not ok then
+                previousCx:toast("error", "无法收起当前工具", err)
+                complete()
+                return
+            end
             verifyManaged(previousCx, tool, function(stillVerified, finalCx)
                 if not finalCx then complete(); return end
-                if not stillVerified or finalCx.session:focused() ~= focused
+                local currentTarget = liveTool(finalCx, tool)
+                if not stillVerified or finalCx.session:focused() ~= source.pane
                     or tools[tool.key] ~= tool or byPane[tool.pane] ~= tool
-                    or tools[previous.key] ~= previous or byPane[previous.pane] ~= previous then
-                    finalCx:toast("error", "工具身份已变化", "未收起当前工具。")
-                    complete()
-                    return
-                end
-                local ok, err = finalCx.layout:park(previous.pane)
-                if not ok then
-                    finalCx:toast("error", "无法收起当前工具", err)
+                    or tools[previous.key] ~= previous or byPane[previous.pane] ~= previous
+                    or not currentTarget or currentTarget.exited ~= nil
+                    or not sourcePane(finalCx, source.pane) then
+                    finalCx:toast("error", "工具身份已变化", "目标未显示；当前工具保持收起。")
                     complete()
                     return
                 end
@@ -509,6 +522,10 @@ local function openForOwner(cx, kind, owner, requestedPane)
             return
         end
     end
+    if configError then
+        cx:toast("error", "Kiku 配置错误", configError)
+        return
+    end
     local flight = {}
     pending[owner.key] = flight
     local function finish()
@@ -578,27 +595,9 @@ local function openForOwner(cx, kind, owner, requestedPane)
                 nextCx:toast("info", "Kiku 助手依赖回退",
                     name .. " 已使用 " .. fallback.path .. "（" .. fallback.reason .. "）")
             end
-            tern.process.run({ result.paths.git, "-C", owner.cwd, "rev-parse", "--show-toplevel" },
-                { timeout_ms = 3000, env = { PATH = result.pathEnv } }, function(check, checkedCx)
-                    if not checkedCx then finish(); return end
-                    if checkedCx.hosts:current().id ~= owner.host
-                        or checkedCx.sessions:current().id ~= owner.session
-                        or checkedCx.session:focused() ~= requestedPane
-                        or not sourcePane(checkedCx, owner.pane) then
-                        finish()
-                        checkedCx:toast("error", "Kiku 助手来源已变化", "未启动 lazygit。")
-                        return
-                    end
-                    if check.status ~= 0 or check.timed_out then
-                        finish()
-                        checkedCx:toast("error", "当前目录不是可用的 Git 仓库",
-                            "未初始化仓库，也未创建工具窗格。")
-                        return
-                    end
-                    continueWith({ git = result.paths.git, lazygit = result.paths.lazygit,
-                        pathEnv = result.pathEnv })
-                end)
-            end)
+            continueWith({ git = result.paths.git, lazygit = result.paths.lazygit,
+                pathEnv = result.pathEnv })
+        end)
     else
         continueWith(nil)
     end
@@ -810,8 +809,9 @@ local function restore(cx)
         end)
 end
 
-function M.register(config, executableResolver)
+function M.register(config, executableResolver, loadConfigError)
     executables = executableResolver
+    configError = loadConfigError
     tern.command({
         id = "open_terminal", title = "Kiku：打开临时终端", group = "Kiku 助手",
         keys = { config.terminalKeybinding }, run = function(cx) open(cx, "terminal") end,
