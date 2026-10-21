@@ -4,6 +4,7 @@ local manager = require("./lib/manager")
 local removal = require("./lib/removal")
 local configModule = require("./lib/config")
 local executableModule = require("./lib/executables")
+local toolsModule = require("./lib/tools")
 
 local config, configError = configModule.read()
 local executables = executableModule.new(config.executables)
@@ -1369,3 +1370,4 @@ tern.command({
     available = function() return executables:ready("git") end,
     run = function(cx) startWithGit(cx, { "git", "realpath" }, manage) end,
 })
+toolsModule.register(config, executables)

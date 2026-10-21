@@ -14,13 +14,17 @@ import subprocess
 import tempfile
 import time
 from types import SimpleNamespace
+from native_window import NativeWindow
+from removal import run as run_removal_scenarios
 from dangerous_removal import run as run_dangerous_removal_scenarios
 from management import _has_error_alert, run as run_management_scenarios
 from pending_removal import run as run_pending_removal_scenarios
-from removal import run as run_removal_scenarios
 from dependencies import run as run_dependency_scenarios
+from tools import run as run_tool_scenarios, run_restart as run_tool_restart_scenario
 
 PROJECT = Path(__file__).resolve().parents[1]
+TERN_BIN = None
+CTL_ENV = None
 ROOT = Path(tempfile.mkdtemp(prefix="tern-kiku-test-")).resolve()
 SOCKET = ROOT / "control.sock"
 REPO = ROOT / "repos" / "项目 with spaces"
@@ -36,8 +40,8 @@ def git(*args, cwd=REPO, check=True):
 
 
 def ctl(command):
-    result = subprocess.run(["tern", "ctl", "--control", str(SOCKET), command],
-                            capture_output=True, text=True, timeout=20)
+    result = subprocess.run([TERN_BIN or "tern", "ctl", "--control", str(SOCKET), command],
+                            capture_output=True, text=True, timeout=20, env=CTL_ENV)
     try:
         data = json.loads(result.stdout)
     except Exception as exc:
@@ -148,7 +152,13 @@ def record(label):
     print("PASS " + label, flush=True)
 
 
-def main(dependencies_only=False):
+def main(dependencies_only=False, tools_only=False, restart_only=False):
+    global ROOT, SOCKET, REPO, PLUGIN, TERN_BIN, CTL_ENV
+    native = None
+    if tools_only:
+        native = NativeWindow(ROOT)
+        native.check_desktop()
+        SOCKET = native.socket
     REPO.mkdir(parents=True)
     git("init", "-b", "main")
     git("config", "user.name", "Kiku Test")
@@ -172,48 +182,92 @@ def main(dependencies_only=False):
     (fixture / "kiku.path").write_text(str(PLUGIN) + "\n")
     configured_tools = ROOT / "configured tools with spaces"
     path_tools = ROOT / "launch PATH"
-    if dependencies_only:
-        system_git = shutil.which("git")
-        assert system_git, "Git is required; install it explicitly before running this scenario"
-        configured_tools.mkdir()
+    if dependencies_only or tools_only or restart_only:
         path_tools.mkdir()
-        configured_git = configured_tools / "git"
-        configured_git.symlink_to(system_git)
-        (PLUGIN / "config.json").write_text(json.dumps({
-            "defaultPath": "", "keybinding": "",
-            "executables": {"git": str(configured_git)},
-        }))
-    env = dict(os.environ, TERN_CONFIG_DIR=str(ROOT / "config"),
-               STENCIL_FIXTURE_ROOT=str(ROOT / "crates" / "tern"), STENCIL_LOG_DIR=str(ROOT / "logs"))
-    if dependencies_only:
-        env["PATH"] = str(path_tools)
-    tern = shutil.which("tern")
-    assert tern, "Tern is required; install it explicitly before running this scenario"
-    log = open(ROOT / "serve.log", "w")
-    server = subprocess.Popen([tern, "serve", "--control", str(SOCKET), "--out", str(ROOT / "shots")],
-                              cwd=ROOT, env=env, stdout=log, stderr=log)
+        if dependencies_only:
+            system_git = shutil.which("git")
+            assert system_git, "Git is required; install it explicitly before running this scenario"
+            configured_tools.mkdir()
+            configured_git = configured_tools / "git"
+            configured_git.symlink_to(system_git)
+            config = {
+                "defaultPath": "", "keybinding": "",
+                "executables": {"git": str(configured_git)},
+            }
+        else:
+            config = {"defaultPath": "", "keybinding": ""}
+        (PLUGIN / "config.json").write_text(json.dumps(config))
+    if native:
+        native.extra_env.update({"STENCIL_FIXTURE_ROOT": str(ROOT / "crates" / "tern"),
+                                 "PATH": str(path_tools)})
+        native.start()
+        env = native.env
+        tern = native.tern
+        log = native.log
+        TERN_BIN = tern
+        CTL_ENV = env
+    else:
+        env = dict(os.environ, TERN_CONFIG_DIR=str(ROOT / "config"),
+                   TERN_DAEMON_SOCKET=str(ROOT / "daemon.sock"),
+                   STENCIL_FIXTURE_ROOT=str(ROOT / "crates" / "tern"),
+                   STENCIL_LOG_DIR=str(ROOT / "logs"))
+        if dependencies_only or restart_only:
+            env["PATH"] = str(path_tools)
+        tern = shutil.which("tern")
+        assert tern, "Tern is required; install it explicitly before running this scenario"
+        TERN_BIN = tern
+        CTL_ENV = env
+        log = open(ROOT / "serve.log", "w")
+        server = subprocess.Popen(
+            [tern, "serve", "--control", str(SOCKET), "--out", str(ROOT / "shots")],
+            cwd=ROOT, env=env, stdout=log, stderr=log,
+        )
     print("Artifacts: " + str(ROOT), flush=True)
     try:
-        deadline = time.monotonic() + 20
-        while not SOCKET.exists():
-            assert server.poll() is None, (ROOT / "serve.log").read_text()
-            assert time.monotonic() < deadline, "Tern startup timeout"
-            time.sleep(0.1)
-        ctl("plugins fixtures")
-        if dependencies_only:
+        if not native:
+            deadline = time.monotonic() + 20
+            while not SOCKET.exists():
+                assert server.poll() is None, (ROOT / "serve.log").read_text()
+                assert time.monotonic() < deadline, "Tern startup timeout"
+                time.sleep(0.1)
+        ctl("plugins run reload_plugins" if native else "plugins fixtures")
+        if dependencies_only or tools_only or restart_only:
+            scenario_ctl = ctl
+            if native:
+                scenario_ctl = lambda command: (
+                    native.reload_plugins(ctl) if command == "plugins fixtures" else ctl(command)
+                )
             harness = SimpleNamespace(
-                repo=REPO, plugin=PLUGIN, root=ROOT, git=git, ctl=ctl, picker=picker,
+                repo=REPO, plugin=PLUGIN, root=ROOT, git=git, ctl=scenario_ctl, picker=picker,
                 type_text=type_text, replace_text=replace_text, begin=begin, name=name,
                 created=created, state=state, wait_for=wait_for, lua=lua, lua_json=lua_json,
                 open_repo=open_repo, record=record, configured_tools=configured_tools, path_tools=path_tools,
             )
-            run_dependency_scenarios(harness)
-            (ROOT / "dependency-report.json").write_text(json.dumps(
-                {"passed": passed}, ensure_ascii=False, indent=2,
-            ))
+            if dependencies_only:
+                run_dependency_scenarios(harness)
+                (ROOT / "dependency-report.json").write_text(json.dumps(
+                    {"passed": passed}, ensure_ascii=False, indent=2,
+                ))
+            elif restart_only:
+                run_tool_restart_scenario(harness)
+                (ROOT / "tools-restart-report.json").write_text(json.dumps(
+                    {"passed": passed, "count": len(passed), "artifacts": str(ROOT)},
+                    ensure_ascii=False, indent=2,
+                ))
+            else:
+                run_tool_scenarios(harness)
+                (ROOT / "tools-report.json").write_text(json.dumps(
+                    {"passed": passed, "count": len(passed), "artifacts": str(ROOT)},
+                    ensure_ascii=False, indent=2,
+                ))
             return
+        wait_for(
+            lambda _: "available = true" in lua(
+                'return cx.actions:describe("plugin.kiku.create_worktree")'),
+            "asynchronous Git availability becomes ready",
+        )
         action = lua('return cx.actions:describe("plugin.kiku.create_worktree")')
-        assert "available = true" in action and "kiku" in action, action
+        assert "available = true" in action, action
         management_action = lua('return cx.actions:describe("plugin.kiku.manage_worktrees")')
         assert "available = true" in management_action, management_action
         record("plugin load and shortcut registration")
@@ -520,12 +574,19 @@ def main(dependencies_only=False):
             (ROOT / "last-tree.json").write_text(json.dumps(ctl("tree"), ensure_ascii=False, indent=2))
         except Exception:
             pass
-        try: ctl("quit")
-        except Exception: server.terminate()
-        try: server.wait(timeout=10)
-        except subprocess.TimeoutExpired: server.kill(); server.wait()
-        log.close()
+        if native:
+            native.close(ctl)
+        else:
+            try: ctl("quit")
+            except Exception: server.terminate()
+            try: server.wait(timeout=10)
+            except subprocess.TimeoutExpired: server.kill(); server.wait()
+            log.close()
 
 
 if __name__ == "__main__":
-    main("--dependencies-only" in sys.argv)
+    arguments = set(sys.argv[1:])
+    if "--tools-only" in arguments:
+        subprocess.run([sys.executable, str(Path(__file__).resolve()), "--tool-restart-only"], check=True)
+    main(dependencies_only="--dependencies-only" in arguments,
+         tools_only="--tools-only" in arguments, restart_only="--tool-restart-only" in arguments)
