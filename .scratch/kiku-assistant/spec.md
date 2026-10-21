@@ -1,6 +1,6 @@
 # Kiku 助手本机快捷工具与依赖管理
 
-Status: ready-for-agent
+Status: resolved
 
 ## 授权与来源
 
@@ -50,3 +50,11 @@ Status: ready-for-agent
 ## 完成规则
 
 所有 ticket 集成验收后，按基线执行 code-review 的 Standards 和 Spec 双轴并行审查，再做终止程序／路径风险安全审查；若有问题由单个实施代理集中修复，验证后关闭全部工作。所有 tickets resolved 后规范才能 resolved。记录提交和实际证据，清理本轮实施 worktree，保留用户工作区与配置，不推送。
+
+## Result
+
+- 01–04均已集成并验收；集成分支为 `integration/kiku-assistant`，最终代码提交为 `04ce13004a4920b993fc727345e3bbf0a65a6f8e`。命名、程序依赖、临时终端与lazygit行为完整落地，稳定插件ID保持 `kiku`。
+- 固定基线审查的Spec两项P2、安全一项P2及增量测试夹具问题均已修正；最终Standards、Spec、安全复查均无未解决问题。异步切换的精确竞态间隙仅静态确认，未动态复现。
+- macOS真实Tern／Git／lazygit共112组核心回归和额外4种配置错误组合通过，独立非Git入口另行通过；实际截图、red/green、最终集成回归与限制见 [验证记录](../../docs/verification.md)。
+- Linux未实测；非本机上下文仅验证安全拒绝，远程执行按用户决定延后。安全模式不跨插件重载接管旧实例。
+- 全部本轮实施checkout已清理，保留验证产物；用户暂存内容、config.json及TODO.md原样保留。未推送、未建PR、未实际重命名本地目录或远端仓库。

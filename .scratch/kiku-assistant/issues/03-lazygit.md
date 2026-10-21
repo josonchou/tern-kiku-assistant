@@ -35,4 +35,7 @@ lib/tools.luau、tests/tools.py 或独立 tests/lazygit.py、必要的依赖模�
 - 以 `e5f908a27dbf22675c8f34388c7716444efa9593` 集成到 `integration/kiku-assistant`；仅包含工具生命周期、lazygit 执行桥及真实集成场景四个文件，未纳入用户配置或暂存内容。
 - 真实 lazygit 12组通过：`tern-kiku-test-qhi4qcky`（GUI9组）、`tern-kiku-test-u24es6ey`（serve Restart）、`tern-kiku-test-b4shmxg2`／`tern-kiku-test-e0_zsvj1`（分别缺Git／缺lazygit）。已查看真实TUI与失败卡片截图。
 - 集成后临时终端11组通过：`tern-kiku-test-hb0phwp2`（Restart）、`tern-kiku-test-8wdgg_vi`（GUI10组，含非本机安全拒绝）。依赖6组、完整worktree83组分别通过 `tern-kiku-test-5l5rik_b`、`tern-kiku-test-b6snyubr`，未带诊断插桩。
-- 均为 macOS / Tern 0.9.5 的实际运行；Linux未实测。完整记录见 `docs/verification.md`；规范级固定基线审查尚待完成，不能把本任务关闭当作整项最终交付。
+- 均为 macOS / Tern 0.9.5 的实际运行；Linux未实测。完整记录见 `docs/verification.md`。
+- 最终审查修正 `04ce130` 移除非Git预拒绝，补全配置错误门控并修正切换授权顺序；Standards、Spec及安全复查均无未解决问题，精确竞态间隙仅完成静态确认。
+- 最终lazygit12组通过 `tern-kiku-test-l2fd92c1`／`tern-kiku-test-3iusn2bb`／`tern-kiku-test-enxvqamk`／`tern-kiku-test-osjgn8_k`；独立非Git入口另在 `tern-kiku-test-2gtgsrjq` 通过，未知字段／错误类型与两个新入口的4种组合在 `tern-kiku-test-x_o5rlyy` 通过。
+- 最终集成后的依赖6组、完整worktree83组分别通过 `tern-kiku-test-fo7hqi9m`、`tern-kiku-test-38z4p3s0`，没有诊断插桩；规范级审查、关票及实施checkout清理已完成。

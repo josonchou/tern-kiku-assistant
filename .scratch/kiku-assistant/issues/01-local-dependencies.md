@@ -39,3 +39,5 @@ Spec: ../spec.md
 - `PYTHONDONTWRITEBYTECODE=1 python3 tests/integration.py --dependencies-only` 在 macOS / Tern 0.9.5 通过6组；证据：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-ud5i4urz/dependency-report.json`。
 - 已证明：PATH 无 Git 时含空格显式路径可真实创建；失效配置回退 PATH；缺 realpath 保留打开并隐藏移除；特殊字符路径按单个程序执行；Git 全缺失不改变 pane/refs/登记；重载后未调用命令即可恢复可用入口。原有完整安全回归按规范留到全部切片集成后执行。
 - 修正测试夹具：macOS `/usr/bin/git` 是按 basename 分派的系统启动器，不能改名为 `git executable`；显式与 PATH 程序放在不同目录，避免错误回退伪装显式路径测试通过。
+- 最终审查修正 `04ce130` 将配置错误传至两个新工具启动入口；未知字段／错误类型与两个入口的4种组合在 `tern-kiku-test-x_o5rlyy` 通过，保持已确认实例管理路径独立。
+- 最终集成分支依赖6组及完整worktree83组分别通过 `tern-kiku-test-fo7hqi9m`、`tern-kiku-test-38z4p3s0`；完整记录见 `docs/verification.md`。

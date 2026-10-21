@@ -182,3 +182,34 @@ lazygit 的真实 `--version` 探测也会调用 Git，不能把第一条 Git �
 结合上一节的12组 lazygit 场景，共112组通过。最后两组命令的串行总耗时248.32秒；本次完整 worktree 运行没有重现此前50ms预算中断，不据此声称已定位或修复宿主预算问题。固定基线审查及其修正仍须单独完成。
 
 已另外查看 `tern-kiku-test-qhi4qcky/target/shots/tern/live/lazygit-failure-retained.png`：失败的原生卡片、Restart／Close 控件以及原先 lazygit 输出均保留可查看。
+
+### 固定基线审查与最终修正
+
+固定基线为 `4f63305a76ebd4f0831a54837cd4a7b7ed620eef`，首次审查 HEAD 为 `b2229e0`；修正以 `04ce13004a4920b993fc727345e3bbf0a65a6f8e` 集成：
+
+- **Standards**：首次与增量复查均为0项。
+- **Spec**：两项 P2 已修正。非 Git 目录不再被插件预拒绝，仓库交互交给真实 lazygit；配置读取错误传递至两个新工具入口，拒绝新建但不阻断已确认实例的管理。
+- **Security**：一项 P2 已静态复核修正。双工具切换改为先验证目标、再验证上一实例，在同一回调同步复核并立即收起上一实例，之后重新验证目标才显示；收起授权不再跨越另一次异步验证。精确竞态间隙未动态复现，真实切换、Restart、失败卡片场景不能冒充该精确时序的回归证明。
+
+上文历史记录中的“非 Git 拒绝”是此次发现的规格偏差，不是最终验收行为。真实 red `tern-kiku-test-fbfgxcy8` 未能启动程序；修正后的原生截图 `tern-kiku-test-9nm8nid7/target/shots/tern/live/lazygit-non-git.png` 已由主线程查看：真实程序在来源目录询问是否创建 Git 仓库（y/N），插件没有自动初始化。完整与独立入口的最终通过证据见下表。
+
+配置错误的 red `tern-kiku-test-o5sefiji` 也有实际副作用证据：启动前只有 pane4294967298／7300，失败状态却聚焦新增 pane4294967302，且已执行工具身份初始化。测试最初通过 Carly 调用动作，其关闭会清除新守卫的同步错误提示；最终改为真实原生快捷键，不给生产提示添加延时或截断。
+
+增量复查另发现非 Git 共用测试误把累计日志当作本次启动，并在 PATH 回退后仍期待失效的配置路径。`tern-kiku-test-3p9o_pw3` 实际暴露了4条累计启动记录；改为记录启动前基线、仅验证新增记录及该场景应使用的 wrapper，保留后续生命周期断言。复查后 Standards、Spec 均为0项，安全复查无新增问题。
+
+| 最终验证范围 | 通过情况 | 证据目录 |
+| --- | --- | --- |
+| 外部程序解析与独立门控 | 6组 | `tern-kiku-test-fo7hqi9m` |
+| 完整 worktree 创建、管理、正常／危险移除 | 83组 | `tern-kiku-test-38z4p3s0` |
+| 临时终端、Restart、来源关闭与非本机拒绝 | 11组 | `tern-kiku-test-rid2bfbb`、`tern-kiku-test-ygdi08qj` |
+| lazygit 完整 GUI、Restart、独立缺 Git／缺 lazygit | 12组 | `tern-kiku-test-l2fd92c1`、`tern-kiku-test-3iusn2bb`、`tern-kiku-test-enxvqamk`、`tern-kiku-test-osjgn8_k` |
+| 未知字段／错误类型 × 两个新工具入口 | 4种组合 | `tern-kiku-test-x_o5rlyy` |
+| 独立非 Git 入口 | 1组，与完整 lazygit 场景共用行为验证 | `tern-kiku-test-2gtgsrjq` |
+
+上述最终工具候选与 `04ce130` 中对应文件已逐字节核对一致。终端批次耗时160.96秒；最终完整 lazygit 与独立非 Git 批次耗时148.01秒。所有结果均来自 macOS 的真实 Tern／进程，不代表 Linux 或真实远程主机已验收。
+
+依赖与完整 worktree 在集成分支 `04ce130` 上串行通过，合计239.14秒，没有诊断插桩。结合工具场景，共112组核心回归及额外4种配置错误组合通过；独立非 Git 入口不重复计入核心组数。本次未重现此前宿主50ms预算中断，不据此声称已定位其根因。
+
+已另行查看最终 `tern-kiku-test-l2fd92c1/target/shots/tern/live/` 下的 `lazygit-real-tui.png` 和 `lazygit-failure-retained.png`：真实仓库差异、右下角浮窗、失败卡片及原生 Restart／Close 控件均实际可见。
+
+规范及01–04任务均已关闭。本轮8个独立实施 clone、1个临时 linked worktree 已清理，另5个历史 checkout 此前已不存在；保留原生测试产物与日志。用户 `.gitignore` 的暂存状态、`config.json` 和忽略的 `TODO.md` 均保持原样；未推送、未创建 PR、未实际重命名本地目录或远端仓库。

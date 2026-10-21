@@ -25,7 +25,7 @@ tern plugin link ~/Workspace/tern-kiku-assistant
 | 收起当前工具 | **Ctrl+B → q** |
 | 结束当前工具 | **Ctrl+B → Shift+Q** |
 
-从来源窗格触发时，工具在 Tern 原生右下角小浮窗中启动，初始目录为触发时的当前目录；不强制切换到 Git 根目录。该浮窗不同于 Herdr 的居中大弹窗。临时终端可从非 Git 目录启动，插件不会自动执行 `git init`。
+从来源窗格触发时，工具在 Tern 原生右下角小浮窗中启动，初始目录为触发时的当前目录；不强制切换到 Git 根目录。该浮窗不同于 Herdr 的居中大弹窗。非 Git 目录也可启动临时终端或 lazygit；仓库交互交给 lazygit 自己处理，插件不会自动执行 `git init`。
 
 同一来源窗格最多保留一个 lazygit 和一个临时终端实例。重复打开会聚焦或恢复本次插件运行期内身份已确认的现存实例，保留工具自己的当前目录；退出后再打开才使用来源窗格的新目录。工具内触发另一工具仍归属原来源，不会嵌套。切换工具会收起另一个工具但不结束其程序；同一来源一次只显示一个工具。
 
@@ -39,7 +39,7 @@ tern plugin link ~/Workspace/tern-kiku-assistant
 
 插件仅在确认来源属于本机且目录可知时执行本机操作；远程上下文、主机或来源目录未知时拒绝，不把远程路径当成本机路径。配置的可执行程序路径应指向单个可执行文件，而不是 shell 命令；显式路径存在且可执行时优先，未配置、失效或不可执行时回退到本机 `PATH`，并说明实际使用路径；两者均不可用时停用相应功能并说明本机、程序、配置位置及原因。独立的 `realpath` 缺失只影响正常与危险移除，不影响创建、打开或快捷工具。命令面板会按依赖隐藏不可用的启动项；快捷键或直接调用仍会检查依赖并提示，不会先创建终端再报告缺失。
 
-快捷键动作 ID：`plugin.kiku.open_lazygit`、`plugin.kiku.open_terminal`、`plugin.kiku.hide_tool`、`plugin.kiku.end_tool`、`plugin.kiku.restore_tools`。程序路径配置的键为 `executables.git`、`executables.lazygit`、`executables.realpath`。原有 `defaultPath`、`keybinding`、`manageKeybinding` 语义及用户覆盖保持不变；以下配置示例仅展示新增项，不要求覆盖现有用户配置：
+快捷键动作 ID：`plugin.kiku.open_lazygit`、`plugin.kiku.open_terminal`、`plugin.kiku.hide_tool`、`plugin.kiku.end_tool`、`plugin.kiku.restore_tools`。程序路径配置的键为 `executables.git`、`executables.lazygit`、`executables.realpath`。原有 `defaultPath`、`keybinding`、`manageKeybinding` 语义及用户覆盖保持不变；以下示例展示可配置字段，不要求覆盖现有用户配置：
 
 ```json
 {
@@ -139,7 +139,7 @@ tern plugin link ~/Workspace/tern-kiku-assistant
 - `manageKeybinding`：管理 worktree 的独立快捷键，格式相同；空字符串表示不绑定，仍可从命令面板运行。
 - `lazygitKeybinding`、`terminalKeybinding`、`hideToolKeybinding`、`endToolKeybinding`：对应快捷工具的可配置快捷键；默认分别为 `ctrl+b>alt+g`、`ctrl+b>t`、`ctrl+b>q`、`ctrl+b>shift+q`。
 - `executables.git`、`executables.lazygit`、`executables.realpath`：对应程序的本机可执行文件路径；留空或路径不可用时从本机 `PATH` 回退查找。Git、lazygit、realpath 各按依赖门控对应功能，不会自动安装程序。
-- 原有配置字段仍按原语义读取，新增字段采用默认值；不必将示例完整复制到已有配置中。
+- 原有配置字段仍按原语义读取，新增字段采用默认值；不必将示例完整复制到已有配置中。未知字段或字段类型错误会明确报错，并阻止新工具启动，不会静默使用默认配置。
 
 修改后在 Tern 命令面板执行 **Reload plugins**。Tern 用户 `keybinds` 可以绑定动作 `plugin.kiku.create_worktree`；用户设置优先于插件快捷键。如果插件快捷键与 Tern 内置键位冲突，Tern 会忽略该绑定，命令面板入口仍可使用。macOS 的 `cmd+alt+w` 已用于关闭标签页。
 
@@ -170,6 +170,8 @@ python3 tests/integration.py
 python3 tests/integration.py --dependencies-only
 python3 tests/integration.py --tools-only
 python3 tests/integration.py --lazygit-only
+python3 tests/integration.py --lazygit-non-git-only
+python3 tests/integration.py --lazygit-config-errors-only
 python3 tests/integration.py --lazygit-missing-git-only
 python3 tests/integration.py --lazygit-missing-lazygit-only
 ```

@@ -97,7 +97,7 @@ https://github.com/jesseduffield/lazygit/blob/17cb09fa7b08bc96d9f0e81b91f4720fc1
 
 报告：`/private/tmp/tks-l5staddh/report.json`。探针准备期间修正了控制命令的 Lua 字符串传参、macOS Unix socket 路径长度和 `PaneInfo.pane` 字段使用；最终五项全部通过。尚未验证远程执行、多窗口并发及完整 worktree 移除流程。
 
-## Herdr 快捷工具迁移（已授权实施，本轮仅本机）
+## Herdr 快捷工具迁移（已实现，本轮仅本机）
 
 用户于 2026-10-21 通过 `grill-with-docs` 确认设计，随后调用 `implement-spec` 授权实施。实施前进一步明确：本次所有功能暂不考虑远程，后续统一实现远程；本节按该最新决定更新，规范及任务图见 [Kiku 助手规范](../.scratch/kiku-assistant/spec.md)。
 
@@ -129,9 +129,9 @@ https://github.com/jesseduffield/lazygit/blob/17cb09fa7b08bc96d9f0e81b91f4720fc1
 - 一次带命令的 `split` 探针报告 `lua exceeded hard slice budget of 50 ms`；随后读取实际状态发现该 pane 已创建，且保留了 `exited = 7` 的失败终端。不能将调用报错视为“未创建”，也不能据此宣称正常退出、错误输出呈现或远程完整生命周期已通过验证。
 - 补充原生证据：`tern-kiku-test-z6g4pw39` 中，普通窗格仅展示旧工具 prefix 文本，恢复扫描便错误认领该窗格。Tern 0.9.5 的 `PaneInfo` 不提供 shell PID／进程代次，进程列表也不提供 pane 绑定；因此不能把旧进程仍存活当作当前候选窗格的身份。用户据此批准上述安全模式，而非降低身份检查以保留启发式恢复。
 
-### 后续实施验收
+### 实施验收契约
 
-以下是设计验收要求，不代表当前功能已实现：
+以下为本轮实现遵循的验收要求；macOS 实际结果与验证限制见 [验证记录](verification.md)，不代表 Linux 已实测：
 
 1. 两个打开快捷键在来源目录、来源主机上创建正确工具，且不改变既有 worktree 操作。
 2. 同源重复打开复用同一实例；从工具内切换不形成嵌套，另一工具自动收起；不同来源不串用。
@@ -144,11 +144,11 @@ https://github.com/jesseduffield/lazygit/blob/17cb09fa7b08bc96d9f0e81b91f4720fc1
 
 用户已通过 `implement-spec` 授权按完整本机规范实施，并确认真实 Tern／Git／进程结果的 TDD 接口。最终审查固定基线为 `4f63305a76ebd4f0831a54837cd4a7b7ed620eef`。
 
-## 命名与第三方程序依赖（已授权实施，本轮仅本机）
+## 命名与第三方程序依赖（已实现，本轮仅本机）
 
 用户于 2026-10-21 补充插件名称、依赖缺失时停用功能和手动程序路径要求，并确认下述入口呈现与路径回退规则。
 
-本节已获本轮实施授权；修改插件清单、运行代码、快捷键和使用说明时仍需保留用户已有配置。本地目录及远端仓库的实际重命名不在本轮执行范围内。
+本节的本机实现已完成，macOS 实机验收见 [验证记录](verification.md)；插件清单、运行代码、快捷键和使用说明已同步，用户已有配置保持原样。本地目录及远端仓库的实际重命名不在本轮执行范围内。
 
 ### 命名
 
@@ -182,7 +182,7 @@ https://github.com/jesseduffield/lazygit/blob/17cb09fa7b08bc96d9f0e81b91f4720fc1
 5. 检测与实际调用必须使用同一解析结果及执行环境，覆盖普通 Git 调用、移除安全专用 Git 调用和 `realpath`。检查到插件可调用某个 Git，不等于已经证明 lazygit 的自身运行环境能调用它。
 6. 配置修改后按现有插件重载方式重新检测。启动前仍检查有效性，不把旧的可用结果当作永久保证。
 
-### 后续实施验收补充
+### 依赖验收补充
 
 - 缺少 lazygit 时不展示其启动项，快捷键仅提示原因；Git/worktree 和临时终端不被连带停用。
 - 缺少 `realpath` 时正常／危险移除均不可执行，但创建、打开和不依赖它的管理动作仍可用。

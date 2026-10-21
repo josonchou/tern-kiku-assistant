@@ -35,3 +35,5 @@ Spec: ../spec.md
 - Restart 的真实进程代次防护单独通过无 daemon 的 Tern，证据 `tern-kiku-test-64b9nach`；同版本 daemon 下普通终端也无法完成原生 Restart，不将宿主限制当成插件验证通过。
 - 非本机上下文拒绝通过，证据 `tern-kiku-test-i26qo4z8`：Tern 自带 loopback 宿主下，快捷键与直接动作均提示拒绝，不在本机创建工具；未连接真实 SSH 主机。
 - 已观察原生浮窗截图；测试使用私有配置、socket、daemon、GUI，并清理自己创建的进程，不触及用户日常会话。完整 worktree 回归与 lazygit 双工具组合仍按后续阶段统一验收。
+- 最终修正 `04ce130` 消除双工具切换中跨异步等待使用上一实例授权的路径；安全静态复查无未解决问题。精确竞态间隙未动态复现，不以普通 Restart 场景冒充该时序证明。
+- 最终终端11组在 `tern-kiku-test-rid2bfbb`／`tern-kiku-test-ygdi08qj` 通过；双工具、失败卡片、重载及存活实例管理随最终lazygit12组通过，证据见 `docs/verification.md`。
