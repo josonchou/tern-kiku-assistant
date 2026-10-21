@@ -139,3 +139,46 @@ Tern 0.9.5 的 daemon 模式另有独立限制：已解锁的全新私有实例�
 - `tern-kiku-test-i26qo4z8`：正常 GUI 的1组非本机上下文拒绝；使用 Tern 自带 loopback 宿主，不连接真实 SSH 主机。
 
 上述目录均位于 `/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/`。已查看此前同路径通过场景的原生浮窗图 `tern-kiku-test-xxxnmqib/target/shots/tern/live/scratch-terminal-restored.png`。本阶段不宣称 lazygit、真实远端或 Linux 已验收。
+
+### 集成回归的预算复核
+
+当前无插桩分支的完整回归在 `tern-kiku-test-c9sv1jtm` 首次普通移除确认前被宿主 `process exceeded 50 ms` 中断；实际日志位于 `logs/tern-serve.log:15-16`。没有据此修改既有移除保护。
+
+仅在隔离诊断 checkout 增加同步边界日志后，`tern-kiku-test-19s5mzlu` 全83组通过，耗时246.24秒。`budget-summary.json` 中，7782次 `physicalPath` 回调的最大同步耗时为22.004 ms，其中提交本机进程的最大耗时为20.872 ms；`manager.visiblePanes` 最大7.996 ms。该次测量没有重现超限，不能据此认定先前中断的具体根因；日志本身也有测量扰动。诊断代码不合入，未放宽预算、添加自动重载／重试或减少断言；最终无插桩集成回归仍须单独记录。
+
+### lazygit 原生夹具与通知边界
+
+正常 GUI 的私有 daemon 环境不会把任意 `CONFIG_DIR` 传入默认 shell；SDK `process.run` 则会继承该变量及 `PATH`。证据：`/private/tmp/kas-_98ebh4f/lazy-native-env-va89q1v8/evidence.json` 与 `lazy-sdk-env-7ojk1z12/evidence.json`。因此 lazygit 夹具通过透明 wrapper 执行真实程序，并显式传入私有 `--use-config-dir`；包括缺 Git 场景中的可用 lazygit。仅给宿主设置环境变量不构成配置隔离证据。
+
+lazygit 的真实 `--version` 探测也会调用 Git，不能把第一条 Git 日志当作 TUI 使用了指定 Git；实际启动证据须匹配本次执行桥、真实父进程与私有仓库状态。macOS `/usr/bin/git` 启动器另依赖 `git` basename；将其软链命名为 `configured git` 会实际返回72，不能把该夹具算作“Git 可用”。
+
+依赖错误的原生 `tree`、`tree .toast` 和 `a11y` 均在120字符处截断通知正文，证据为 `/private/tmp/kas-_98ebh4f/lazy-toast-xkmucv7d/evidence.json`。程序、配置键与关键原因须放在长路径之前；不能承诺任意长路径完整进入通知树，也不使用整句提示文案作为安全结果的验收依据。
+
+`tern-kiku-test-dh56wuef` 已通过真实 lazygit 界面、指定 Git、同源双工具切换／正常退出、跨来源隔离、PATH 回退及非 Git 拒绝的5组场景；`tern-kiku-test-66v00pns` 另通过缺 Git 的独立门控。后续生命周期与最终整分支验收仍须单独记录，这些结果不替代它们。
+
+现有 worktree 入口也修复了同类提示缺项：非空的 `errors.git` 原先遮蔽了含 `executables.git` 的备用提示。临时原生探针在 `tern-kiku-test-q6jo_yxu` 实际失败；改为先显示依赖摘要再附具体原因后，`tern-kiku-test-7nodb7bz` 通过配置位置、PATH 和零新增 pane 断言。没有增加永久措辞锁定测试。
+
+### lazygit 阶段验收
+
+提交 `e5f908a27dbf22675c8f34388c7716444efa9593` 已集成。macOS / Tern 0.9.5 / lazygit 0.65.1 共通过12组真实场景：
+
+- `tern-kiku-test-qhi4qcky`：正常 GUI 的9组场景，包括含空格与 shell 特殊字符的程序路径、实际 Git 执行桥、双工具切换、跨源隔离、路径回退、非 Git 拒绝、双工具来源关闭后独立恢复且不抢焦点、失败卡片、重载后旧 lazygit／执行桥保持，以及配置程序文件消失后的同进程收起、恢复、结束。
+- `tern-kiku-test-u24es6ey`：独立 `serve` 的 Restart 场景。此前 `tern-kiku-test-nxuo6k9t` 证明，拒绝操作未知同源实例前仍创建了一个新终端；现改为创建前预检，实际收起前仍重新核验，最终拒绝不新增 pane、不触碰重启后的代次。
+- `tern-kiku-test-b4shmxg2` 与 `tern-kiku-test-e0_zsvj1`：分别缺 Git、缺 lazygit；只报告实际缺失项，不创建工具 pane。
+
+已读取原生截图 `tern-kiku-test-751_5vlf/target/shots/tern/live/lazygit-real-tui.png`：右下角是真实 lazygit，包含隔离仓库的文件列表与未提交差异。上述结果不替代集成后的临时终端／完整 worktree 回归，也不代表 Linux 已验收。
+
+### 集成后的完整验收（固定基线审查前）
+
+在 `e5f908a` 加工作区依赖提示修正的实际代码上，无诊断插桩运行完成：
+
+| 范围 | 通过组数 | 证据目录 |
+| --- | ---: | --- |
+| 临时终端 Restart | 1 | `tern-kiku-test-hb0phwp2` |
+| 临时终端 GUI 与非本机拒绝 | 10 | `tern-kiku-test-8wdgg_vi` |
+| 外部程序独立解析与门控 | 6 | `tern-kiku-test-5l5rik_b` |
+| 完整 worktree 创建、管理、正常／危险移除 | 83 | `tern-kiku-test-b6snyubr` |
+
+结合上一节的12组 lazygit 场景，共112组通过。最后两组命令的串行总耗时248.32秒；本次完整 worktree 运行没有重现此前50ms预算中断，不据此声称已定位或修复宿主预算问题。固定基线审查及其修正仍须单独完成。
+
+已另外查看 `tern-kiku-test-qhi4qcky/target/shots/tern/live/lazygit-failure-retained.png`：失败的原生卡片、Restart／Close 控件以及原先 lazygit 输出均保留可查看。

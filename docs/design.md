@@ -167,7 +167,7 @@ https://github.com/jesseduffield/lazygit/blob/17cb09fa7b08bc96d9f0e81b91f4720fc1
 | lazygit 工具浮窗 | lazygit 及其运行环境中可用的 Git | 停用 lazygit 的启动，不因 lazygit 缺失而停用插件自身的 Git/worktree 功能 |
 | 临时终端 | Tern 在对应主机配置的 shell | 不依赖 Git、lazygit 或 `realpath`；shell 配置继续由 Tern 管理 |
 
-上述现有实现依据为 `README.md` 的运行依赖说明，以及 `window.luau` 中 `runGit`、`runGitAt`、`removalRun`、`physicalPath` 的直接 argv 调用；lazygit 快捷工具尚未实现。系统 `realpath` 也纳入可手动指定路径的外部程序，不遗漏系统工具。
+现有 worktree 调用使用 `window.luau` 的 Git／realpath helper；lazygit 通过 `lib/lazygit_launch.luau` 的私有 Git 执行桥使用已解析的 Git，真实进程验收见 [验证记录](verification.md)。系统 `realpath` 也纳入可手动指定路径的外部程序，不遗漏系统工具。
 
 - 命令面板隐藏不可用的启动项；选择器中的依赖子动作遵循同样规则。快捷键或直接动作调用仍需保护，只说明缺少哪个程序、对应主机及配置方式，不执行被停用功能。
 - 停用启动能力不等于终止现有实例：本次运行期内身份仍已确认的工具，其聚焦、收起、结束与恢复不因可执行文件后来消失而被禁用，也不重新启动程序。重载后或身份代次未知的旧实例遵循上述安全模式。

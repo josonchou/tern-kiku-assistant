@@ -157,23 +157,35 @@ tern plugin link ~/Workspace/tern-kiku-assistant
 
 ## 开发和验证
 
-插件无需构建，也无需 Python、Node 或 lazygit 作为运行依赖。运行依赖 Tern/Luau 和 Git；移除安全审查额外依赖系统 `realpath`，创建和打开不需要它。快捷工具按需依赖 lazygit；Python 3 仅用于集成验证。
+插件无需构建；Python、Node 不是运行依赖。运行时需要 Tern/Luau，各功能独立检查程序：工作树操作需要 Git，正常／危险移除另需系统 `realpath`，lazygit 浮窗需要 lazygit 和 Git；临时终端只沿用 Tern 默认 shell。Python 3 仅用于集成验证。
 
 ```bash
 # 为编辑器生成与本机 Tern 匹配的声明文件（已 gitignore）
 tern plugin types .
 
-# 真实 Tern/Git 集成测试；测试工具额外需要 Python 3
+# 真实 Tern/Git 工作树完整回归
 python3 tests/integration.py
+
+# 依赖隔离与快捷工具（工具组包含独立 serve Restart 回归）
+python3 tests/integration.py --dependencies-only
+python3 tests/integration.py --tools-only
+python3 tests/integration.py --lazygit-only
+python3 tests/integration.py --lazygit-missing-git-only
+python3 tests/integration.py --lazygit-missing-lazygit-only
 ```
 
-测试使用独立 Tern 配置、测试插件副本和临时 Git 仓库，不修改日常 Tern 配置。测试结束会关闭实例；报告、截图和日志保留在打印出的临时目录。Linux 测试需要可运行 Tern 的图形环境；当前实测平台为 macOS。
+测试使用独立 Tern 配置、测试插件副本和临时 Git 仓库，不修改日常 Tern 配置。快捷工具使用正常 GUI 与私有 daemon；macOS 验收期间需保持本机桌面解锁。lazygit 的真实 wrapper 显式使用私有配置目录，不能只依赖宿主环境变量隔离其配置。测试结束会关闭实例；报告、截图和日志保留在打印出的临时目录。Linux 需要可运行 Tern 的图形环境，尚未实测。
 
 目录结构：
 
 ```text
 plugin.toml          # 插件清单
 window.luau          # 原生创建／管理流程、异步 Git 操作及工作树标签页绑定
+lib/config.luau      # 配置字段与默认值
+lib/executables.luau # 本机外部程序解析、探测和功能门控
+lib/tools.luau       # 来源工具实例、浮窗与生命周期
+lib/tool_identity.luau # 本次运行期的进程启动身份验证
+lib/lazygit_launch.luau # 私有 Git 执行桥与 lazygit 启动环境
 lib/worktree.luau    # Git porcelain 解析、路径和创建参数
 lib/manager.luau     # 本机跨会话 pane 与工作树身份匹配
 lib/removal.luau     # 共用的安全移除审查与路径边界检查

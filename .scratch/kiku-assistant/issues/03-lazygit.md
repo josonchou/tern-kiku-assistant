@@ -1,6 +1,6 @@
 # 03 lazygit 与双工具切换
 
-Status: claimed
+Status: resolved
 Type: task
 Blocked by: 02
 Spec: ../spec.md
@@ -29,3 +29,10 @@ lib/tools.luau、tests/tools.py 或独立 tests/lazygit.py、必要的依赖模�
 ## Comments
 
 - 2026-10-21：02 已以 `5fc44a8` 集成并完成11组分模式验收，现领取03。沿用同运行期身份验证与安全模式，不重新引入跨重载接管；真实 lazygit 首条 red 场景先交主代理运行。
+
+## Result
+
+- 以 `e5f908a27dbf22675c8f34388c7716444efa9593` 集成到 `integration/kiku-assistant`；仅包含工具生命周期、lazygit 执行桥及真实集成场景四个文件，未纳入用户配置或暂存内容。
+- 真实 lazygit 12组通过：`tern-kiku-test-qhi4qcky`（GUI9组）、`tern-kiku-test-u24es6ey`（serve Restart）、`tern-kiku-test-b4shmxg2`／`tern-kiku-test-e0_zsvj1`（分别缺Git／缺lazygit）。已查看真实TUI与失败卡片截图。
+- 集成后临时终端11组通过：`tern-kiku-test-hb0phwp2`（Restart）、`tern-kiku-test-8wdgg_vi`（GUI10组，含非本机安全拒绝）。依赖6组、完整worktree83组分别通过 `tern-kiku-test-5l5rik_b`、`tern-kiku-test-b6snyubr`，未带诊断插桩。
+- 均为 macOS / Tern 0.9.5 的实际运行；Linux未实测。完整记录见 `docs/verification.md`；规范级固定基线审查尚待完成，不能把本任务关闭当作整项最终交付。

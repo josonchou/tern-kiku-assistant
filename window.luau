@@ -1333,7 +1333,7 @@ local function startWithGit(cx, names, entry)
         cx:toast("error", "无法确定当前项目目录", "请聚焦已报告工作目录的终端。")
         return
     end
-    executables:check(cx, names, function(nextCx, result)
+    executables:check(cx, names, function(nextCx, result, missing)
         if not nextCx then return end
         local currentHost = nextCx.hosts:current()
         local currentSession = nextCx.sessions:current()
@@ -1347,7 +1347,8 @@ local function startWithGit(cx, names, entry)
         end
         if not result.paths.git then
             nextCx:toast("error", "Kiku 助手缺少 Git",
-                result.errors.git or "请检查本机 executables.git 配置与 PATH。")
+                (missing or "本机 Git 不可用（executables.git / PATH）") .. " · "
+                    .. (result.errors.git or "请检查程序路径。"))
             return
         end
         for name, fallback in pairs(result.fallbacks) do
