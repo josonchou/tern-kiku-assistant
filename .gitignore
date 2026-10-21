@@ -2,3 +2,4 @@
 tern.d.luau
 .test-artifacts/
 __pycache__/
+TODO.md
