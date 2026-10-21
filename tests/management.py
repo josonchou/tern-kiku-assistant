@@ -244,8 +244,10 @@ def run(h):
     config["manageKeybinding"] = ""
     (h.plugin / "config.json").write_text(json.dumps(config))
     h.ctl("plugins fixtures")
-    action = h.lua('return cx.actions:describe("plugin.kiku.manage_worktrees")')
-    assert "available = true" in action, action
+    h.wait_for(
+        lambda _: h.lua_json('cx.actions:describe("plugin.kiku.manage_worktrees")')["available"],
+        "management dependency refresh finishes before shortcut checks",
+    )
     h.ctl("key ctrl+b")
     h.ctl("key shift+m")
     h.wait_for(lambda s: not s["picker"], "unbound management shortcut leaves UI unchanged")

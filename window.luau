@@ -496,7 +496,7 @@ local function dangerousRiskItems(review)
 end
 
 local function removeWorktree(cx, flow, worktree, dangerous)
-    if not activePrograms.realpath then
+    if not flow.programs.paths.realpath then
         fail(cx, flow, "realpath 不可用；拒绝移除 worktree。")
         return
     end

@@ -111,3 +111,15 @@
 测试夹具将显式程序目录与 PATH 目录分离，避免回退掩盖错误；macOS 系统 Git 启动器保留 `git` basename。重载入口曾实际保持不可用，现改为加载时直接启动非阻塞探测，不依赖只触发一次的 `window_start`。
 
 已观察真实命令面板的“Kiku 助手”分组：`/tmp/kas-eHG7Dx/shots/serve/kiku-assistant-palette-ready.png`。这仅为依赖与命名阶段证据，不替代后续快捷工具生命周期与完整 worktree 回归。
+
+### 依赖集成后的完整 worktree 回归
+
+2026-10-21，在 macOS / Tern 0.9.5 上，以禁写字节码及独立 `pycache_prefix` 运行 `tests/integration.py`，完整通过83组原生场景。证据目录：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-ne_dq4zz/`。覆盖创建、跨会话管理、安全关闭、正常／危险移除、确认期间变更、fsmonitor、未完成 Git 操作与全部既有保护；不代表快捷工具或 Linux 已验收。
+
+此前正常移除未出现确认框，原生错误通知捕获于 `tern-kiku-test-zbkg02t2/observed-error-303.json`；实际原因是 `removeWorktree` 仍引用已移除的 `activePrograms` 全局。现使用该流程的 `flow.programs.paths.realpath`，与审查和执行使用同一依赖快照。管理快捷键夹具在重载后先等待真实依赖就绪，再区分未绑定快捷键与暂时不可用状态，没有取消安全断言或放宽超时。
+
+### 快捷工具安全模式的决定依据
+
+`tern-kiku-test-z6g4pw39` 的真实回归证明：恢复扫描将仅展示旧工具 prefix 文本的普通终端误认成工具。后续只读审查确认，数字 PID／精确握手文本仍不能证明候选 pane 与旧进程的绑定。用户明确取消本轮跨重载自动接管，改为旧实例及代次未知的失败卡片交由 Tern 原生管理；此处记录授权边界，不宣称安全模式代码已经验收。
+
+来源关闭探针区分了两条路径：Carly 直接 `cx.layout:close` 未产生所期待的 `pane_closed` 通知；真实来源终端执行 `exit 0` 会产生事件，并在保留完整进程验证的情况下收起原工具、保留任务及同实例恢复。证据分别为 `tern-kiku-test-f_ni9nzw` 与 `tern-kiku-test-oj0hrj7w`。工具回归改为原生用户关闭路径，不通过跳过身份验证或增加等待时间迎合夹具。
