@@ -1,6 +1,6 @@
 # 04 插件命名与使用文档
 
-Status: ready-for-agent
+Status: resolved
 Type: task
 Blocked by: none
 Spec: ../spec.md
@@ -26,3 +26,11 @@ Spec: ../spec.md
 读取tdd技能，但此票据仅命名与说明，不写无行为价值的措辞测试，也不运行测试/build/lint/formatter。先核对README现状再局部修改。中文Conventional Commit，报告前合并integration/kiku-assistant tip。集成和原生加载通过后由集成人resolved。
 
 ## Comments
+
+- 2026-10-21：命名与 README 文档代理领取；与01文件边界独立，隔离并行。
+
+## Result
+
+- 命名与文档已集成：`bba4010b226a3c83203f6100d864d5f8703fdf3c`。插件 ID 和实际仓库位置不变。
+- 已在隔离 Tern 0.9.5 加载真实清单、入口，观察命令面板显示“Kiku 助手”分组及原有创建／管理动作；截图：`/tmp/kas-eHG7Dx/shots/serve/kiku-assistant-palette-ready.png`。
+- README 按完整本机规范记录新工具与程序配置；后续工具集成最终复核文档一致性，不把本票据的命名验收称为工具功能已完成。

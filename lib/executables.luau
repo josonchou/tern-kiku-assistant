@@ -1,13 +1,10 @@
 local tern = require("tern")
 local M = {}
-local function pathEnv(cx)
-    return cx.getenv("PATH") or ""
-end
 local function probe(name, cx, path, env, callback)
     local args = name == "realpath" and { path, "/" } or { path, "--version" }
     local ok = pcall(function()
         tern.process.run(args, { timeout_ms = 2000, env = { PATH = env } }, function(result, nextCx)
-            callback(nextCx ~= nil and result.status == 0, nextCx)
+            if nextCx then callback(result.status == 0, nextCx) end
         end)
     end)
     if not ok then callback(false, cx) end
@@ -36,10 +33,10 @@ end
 function M.new(paths)
     local self = { configured = paths, state = {}, env = "" }
     function self:ready(name)
-        return self.state[name] ~= false
+        return self.state[name] == true
     end
     function self:check(cx, names, callback)
-        local env = pathEnv(cx)
+        local env = tern.getenv("PATH") or ""
         local result = { paths = {}, pathEnv = env, fallbacks = {}, errors = {} }
         local index = 1
         local function nextTool(nextCx)
@@ -64,7 +61,9 @@ function M.new(paths)
                 fromPath(name, fallbackCx, env, function(path, resolvedCx)
                     if path then
                         result.paths[name] = path
-                        result.fallbacks[name] = { path = path, reason = reason }
+                        if explicit ~= "" then
+                            result.fallbacks[name] = { path = path, reason = reason }
+                        end
                     else
                         result.errors[name] = reason .. "；本机 PATH 中也未找到可执行文件"
                     end

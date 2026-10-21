@@ -171,13 +171,14 @@ def main(dependencies_only=False):
     (ROOT / "crates" / "tern" / "goldens").mkdir(parents=True)
     (fixture / "kiku.path").write_text(str(PLUGIN) + "\n")
     configured_tools = ROOT / "configured tools with spaces"
+    path_tools = ROOT / "launch PATH"
     if dependencies_only:
         system_git = shutil.which("git")
         assert system_git, "Git is required; install it explicitly before running this scenario"
         configured_tools.mkdir()
-        configured_git = configured_tools / "git executable"
+        path_tools.mkdir()
+        configured_git = configured_tools / "git"
         configured_git.symlink_to(system_git)
-        (configured_tools / "git").symlink_to(system_git)
         (PLUGIN / "config.json").write_text(json.dumps({
             "defaultPath": "", "keybinding": "",
             "executables": {"git": str(configured_git)},
@@ -185,7 +186,7 @@ def main(dependencies_only=False):
     env = dict(os.environ, TERN_CONFIG_DIR=str(ROOT / "config"),
                STENCIL_FIXTURE_ROOT=str(ROOT / "crates" / "tern"), STENCIL_LOG_DIR=str(ROOT / "logs"))
     if dependencies_only:
-        env["PATH"] = str(configured_tools)
+        env["PATH"] = str(path_tools)
     tern = shutil.which("tern")
     assert tern, "Tern is required; install it explicitly before running this scenario"
     log = open(ROOT / "serve.log", "w")
@@ -204,9 +205,12 @@ def main(dependencies_only=False):
                 repo=REPO, plugin=PLUGIN, root=ROOT, git=git, ctl=ctl, picker=picker,
                 type_text=type_text, replace_text=replace_text, begin=begin, name=name,
                 created=created, state=state, wait_for=wait_for, lua=lua, lua_json=lua_json,
-                open_repo=open_repo, record=record,
+                open_repo=open_repo, record=record, configured_tools=configured_tools, path_tools=path_tools,
             )
             run_dependency_scenarios(harness)
+            (ROOT / "dependency-report.json").write_text(json.dumps(
+                {"passed": passed}, ensure_ascii=False, indent=2,
+            ))
             return
         action = lua('return cx.actions:describe("plugin.kiku.create_worktree")')
         assert "available = true" in action and "kiku" in action, action

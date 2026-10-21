@@ -1,6 +1,6 @@
 # 01 本机程序解析与依赖门控
 
-Status: ready-for-agent
+Status: resolved
 Type: task
 Blocked by: none
 Spec: ../spec.md
@@ -30,3 +30,12 @@ Spec: ../spec.md
 先读取 tdd 技能及 spec 约定 seam。阶段A只写一条可定向运行的真实配置路径行为测试，返回工作区路径和运行命令供主线程 red；主线程反馈后继续实施。禁止子代理运行测试/build/lint/formatter。主线程green后，提交中文Conventional Commit，合并integration/kiku-assistant tip再报告；不修改票据状态为resolved（集成人负责）。
 
 ## Comments
+
+- 2026-10-21：由本轮依赖实现代理领取，按隔离 worktree 执行；首个失败场景由主线程运行 red。
+
+## Result
+
+- 已集成 `17ab66ef33f1844dd6f77c0bca33974e24ccb224`；本票据关闭提交补充每个流程固定程序快照、重载时非阻塞初始化和真实依赖边界验收。
+- `PYTHONDONTWRITEBYTECODE=1 python3 tests/integration.py --dependencies-only` 在 macOS / Tern 0.9.5 通过6组；证据：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-ud5i4urz/dependency-report.json`。
+- 已证明：PATH 无 Git 时含空格显式路径可真实创建；失效配置回退 PATH；缺 realpath 保留打开并隐藏移除；特殊字符路径按单个程序执行；Git 全缺失不改变 pane/refs/登记；重载后未调用命令即可恢复可用入口。原有完整安全回归按规范留到全部切片集成后执行。
+- 修正测试夹具：macOS `/usr/bin/git` 是按 basename 分派的系统启动器，不能改名为 `git executable`；显式与 PATH 程序放在不同目录，避免错误回退伪装显式路径测试通过。

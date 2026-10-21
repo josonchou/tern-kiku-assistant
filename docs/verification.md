@@ -97,3 +97,17 @@
 ## 验证边界
 
 没有宣称已验证 Linux、Windows、远程 SSH、iOS 或 web。未安装额外 Luau 静态分析器；入口及模块已由本机 Tern 加载执行，行为通过原生运行时和真实 Git 验证。
+
+## Kiku 助手：依赖与命名阶段验收
+
+`PYTHONDONTWRITEBYTECODE=1 python3 tests/integration.py --dependencies-only` 在 macOS / Tern 0.9.5 通过6组原生场景。证据：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-ud5i4urz/dependency-report.json`。
+
+- PATH 不含 Git 时，含空格的显式程序路径仍能实际创建并登记正确 worktree。
+- 显式路径失效可回退 PATH；插件加载／重载后，未调用命令也能完成依赖探测并显示入口。
+- 缺 realpath 不禁用创建与打开，只隐藏移除选项。
+- 配置路径含 shell 特殊字符时仍为单个可执行文件，不产生注入文件。
+- Git 两种解析来源均失效时，快捷键明确拒绝且 pane、refs、登记不变；依赖恢复并重载后流程可再次使用。
+
+测试夹具将显式程序目录与 PATH 目录分离，避免回退掩盖错误；macOS 系统 Git 启动器保留 `git` basename。重载入口曾实际保持不可用，现改为加载时直接启动非阻塞探测，不依赖只触发一次的 `window_start`。
+
+已观察真实命令面板的“Kiku 助手”分组：`/tmp/kas-eHG7Dx/shots/serve/kiku-assistant-palette-ready.png`。这仅为依赖与命名阶段证据，不替代后续快捷工具生命周期与完整 worktree 回归。

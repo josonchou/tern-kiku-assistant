@@ -7,12 +7,10 @@ local executableModule = require("./lib/executables")
 
 local config, configError = configModule.read()
 local executables = executableModule.new(config.executables)
-tern.on("window_start", function(cx)
-    executables:refresh(cx)
-end)
+-- Reload does not replay window_start; start the nonblocking probe at load.
+executables:refresh(nil)
 
 local active
-local activePrograms = { git = "git", realpath = "realpath", pathEnv = "" }
 local chooseMode, chooseLocation, promptPath, promptName, chooseBranch, chooseBase, create, start, manage
 
 local function finish(flow)
@@ -54,9 +52,9 @@ local function prompt(cx, flow, opts, callback)
 end
 
 local function runGit(cx, flow, args, callback)
-    local argv = { activePrograms.git, "-C", flow.root or flow.cwd }
+    local argv = { flow.programs.paths.git, "-C", flow.root or flow.cwd }
     for _, arg in ipairs(args) do table.insert(argv, arg) end
-    tern.process.run(argv, { timeout_ms = 120000, env = { PATH = activePrograms.pathEnv } }, function(result, nextCx)
+    tern.process.run(argv, { timeout_ms = 120000, env = { PATH = flow.programs.pathEnv } }, function(result, nextCx)
         if not nextCx or active ~= flow then return end
         guarded(nextCx, flow, function() callback(nextCx, result) end)
     end)
@@ -86,9 +84,9 @@ local function readGit(cx, flow, args, callback)
 end
 
 local function runGitAt(cx, flow, cwd, args, callback)
-    local argv = { activePrograms.git, "-C", cwd }
+    local argv = { flow.programs.paths.git, "-C", cwd }
     for _, arg in ipairs(args) do table.insert(argv, arg) end
-    tern.process.run(argv, { timeout_ms = 120000, env = { PATH = activePrograms.pathEnv } }, function(result, nextCx)
+    tern.process.run(argv, { timeout_ms = 120000, env = { PATH = flow.programs.pathEnv } }, function(result, nextCx)
         if not nextCx or active ~= flow then return end
         guarded(nextCx, flow, function() callback(nextCx, result) end)
     end)
@@ -102,9 +100,9 @@ local function readGitAt(cx, flow, cwd, args, callback)
 end
 
 local function removalRun(cx, flow, cwd, args, callback)
-    local argv = { activePrograms.git, "-c", "core.fsmonitor=false", "-C", cwd }
+    local argv = { flow.programs.paths.git, "-c", "core.fsmonitor=false", "-C", cwd }
     for _, arg in ipairs(args) do table.insert(argv, arg) end
-    tern.process.run(argv, { timeout_ms = 120000, env = { PATH = activePrograms.pathEnv } }, function(result, nextCx)
+    tern.process.run(argv, { timeout_ms = 120000, env = { PATH = flow.programs.pathEnv } }, function(result, nextCx)
         if not nextCx or active ~= flow then return end
         guarded(nextCx, flow, function() callback(nextCx, result) end)
     end)
@@ -113,8 +111,10 @@ end
 local function physicalPath(cx, flow, path, callback)
     removal.require(type(path) == "string" and path:sub(1, 1) == "/",
         "无法确认路径是否为本机绝对路径；拒绝移除。")
-    tern.process.run({ activePrograms.realpath, path }, {
-        timeout_ms = 30000, env = { PATH = activePrograms.pathEnv },
+    removal.require(flow.programs.paths.realpath ~= nil,
+        "本机 realpath 不可用；请检查 executables.realpath 与 PATH。")
+    tern.process.run({ flow.programs.paths.realpath, path }, {
+        timeout_ms = 30000, env = { PATH = flow.programs.pathEnv },
     }, function(result, nextCx)
         if not nextCx or active ~= flow then return end
         guarded(nextCx, flow, function()
@@ -1177,7 +1177,7 @@ chooseMode = function(cx, flow)
     end)
 end
 
-start = function(cx)
+start = function(cx, programs)
     if active then cx:toast("info", "Kiku 工作树流程正在进行", "请完成或按 Esc 取消当前选择。 "); return end
     if configError then cx:toast("error", "Kiku 配置错误", configError); return end
     if tern.runtime.os ~= "macos" and tern.runtime.os ~= "linux" then
@@ -1194,7 +1194,7 @@ start = function(cx)
     end
     local flow = {
         kind = "create", cwd = pane.cwd, sessionId = cx.sessions:current().id,
-        hostId = host.id,
+        hostId = host.id, programs = programs,
     }
     active = flow
     guarded(cx, flow, function()
@@ -1217,7 +1217,7 @@ start = function(cx)
     end)
 end
 
-manage = function(cx)
+manage = function(cx, programs)
     if active then cx:toast("info", "Kiku 工作树流程正在进行", "请完成或按 Esc 取消当前选择。 "); return end
     if configError then cx:toast("error", "Kiku 配置错误", configError); return end
     if tern.runtime.os ~= "macos" and tern.runtime.os ~= "linux" then
@@ -1234,7 +1234,7 @@ manage = function(cx)
     end
     local flow = {
         kind = "manage", cwd = pane.cwd, sessionId = cx.sessions:current().id,
-        hostId = host.id,
+        hostId = host.id, programs = programs,
     }
     active = flow
     guarded(cx, flow, function()
@@ -1276,7 +1276,7 @@ manage = function(cx)
                                 { label = "打开／切换", id = "open" },
                                 { label = "关闭工作环境", id = "close" },
                             }
-                            if activePrograms.realpath then
+                            if flow.programs.paths.realpath then
                                 table.insert(actions, { label = "正常移除 worktree", id = "remove" })
                                 table.insert(actions, { label = "危险移除 worktree", id = "dangerous_remove" })
                             end
@@ -1317,6 +1317,8 @@ manage = function(cx)
     end)
 end
 local function startWithGit(cx, names, entry)
+    if active then cx:toast("info", "Kiku 工作树流程正在进行", "请完成或按 Esc 取消当前选择。"); return end
+    if configError then cx:toast("error", "Kiku 配置错误", configError); return end
     local host = cx.hosts:current()
     local session = cx.sessions:current()
     local focused = cx.session:focused()
@@ -1354,37 +1356,16 @@ local function startWithGit(cx, names, entry)
         entry(nextCx, result)
     end)
 end
-local oldStart, oldManage = start, manage
-start = function(cx)
-    if active then cx:toast("info", "Kiku 工作树流程正在进行", "请完成或按 Esc 取消当前选择。"); return end
-    if configError then cx:toast("error", "Kiku 配置错误", configError); return end
-    startWithGit(cx, { "git" }, function(nextCx, result)
-        activePrograms = {
-            git = result.paths.git, realpath = result.paths.realpath,
-            pathEnv = result.pathEnv,
-        }
-        oldStart(nextCx)
-    end)
-end
-manage = function(cx)
-    if active then cx:toast("info", "Kiku 工作树流程正在进行", "请完成或按 Esc 取消当前选择。"); return end
-    if configError then cx:toast("error", "Kiku 配置错误", configError); return end
-    startWithGit(cx, { "git", "realpath" }, function(nextCx, result)
-        activePrograms = {
-            git = result.paths.git, realpath = result.paths.realpath,
-            pathEnv = result.pathEnv,
-        }
-        oldManage(nextCx)
-    end)
-end
 local defaultKey = "ctrl+b>shift+g"
 tern.command({
     id = "create_worktree", title = "Kiku: 新建 Git worktree", group = "Kiku 助手",
     keys = { config.keybinding ~= "" and config.keybinding or defaultKey },
-    available = function() return executables:ready("git") end, run = start,
+    available = function() return executables:ready("git") end,
+    run = function(cx) startWithGit(cx, { "git" }, start) end,
 })
 tern.command({
     id = "manage_worktrees", title = "Kiku: 管理 Git worktree", group = "Kiku 助手",
     keys = config.manageKeybinding ~= "" and { config.manageKeybinding } or {},
-    available = function() return executables:ready("git") end, run = manage,
+    available = function() return executables:ready("git") end,
+    run = function(cx) startWithGit(cx, { "git", "realpath" }, manage) end,
 })
