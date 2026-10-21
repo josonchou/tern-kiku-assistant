@@ -16,3 +16,19 @@ def run(h):
     assert Path(created["focused"]["cwd"]) == target, created["focused"]
     assert h.git("symbolic-ref", "--short", "HEAD", cwd=target) == "configured-git-path"
     h.record("configured Git executable path containing spaces creates registered worktree")
+
+    (h.plugin / "config.json").write_text(
+        '{"defaultPath":"","keybinding":"","executables":{"git":"/missing/configured git"}}'
+    )
+    h.ctl("plugins fixtures")
+    h.open_repo()
+    h.begin()
+    h.name("path-fallback-git")
+    fallback_target = Path(h.picker(selected="/")["selected"])
+    h.ctl("picker enter")
+    fallback_created = h.created(fallback_target, "path-fallback-git")
+    fallback_records = h.git("worktree", "list", "--porcelain", "-z").split("\0\0")
+    assert any(record.startswith("worktree " + str(fallback_target) + "\0") for record in fallback_records)
+    assert Path(fallback_created["focused"]["cwd"]) == fallback_target
+    assert h.git("symbolic-ref", "--short", "HEAD", cwd=fallback_target) == "path-fallback-git"
+    h.record("invalid configured Git path falls back to Git from the launch PATH")

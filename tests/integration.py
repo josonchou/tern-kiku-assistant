@@ -177,6 +177,7 @@ def main(dependencies_only=False):
         configured_tools.mkdir()
         configured_git = configured_tools / "git executable"
         configured_git.symlink_to(system_git)
+        (configured_tools / "git").symlink_to(system_git)
         (PLUGIN / "config.json").write_text(json.dumps({
             "defaultPath": "", "keybinding": "",
             "executables": {"git": str(configured_git)},

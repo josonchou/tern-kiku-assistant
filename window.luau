@@ -2,28 +2,18 @@ local tern = require("tern")
 local git = require("./lib/worktree")
 local manager = require("./lib/manager")
 local removal = require("./lib/removal")
+local configModule = require("./lib/config")
+local executableModule = require("./lib/executables")
 
-local config = { defaultPath = "", keybinding = "", manageKeybinding = "" }
-local configError
-do
-    local ok, result = pcall(function()
-        local path = tern.plugin.dir .. "/config.json"
-        if not tern.fs.exists(path) then return config end
-        local value = tern.json.decode(tern.fs.read(path, 65536))
-        assert(type(value) == "table", "config.json 必须是 JSON 对象")
-        for key, item in pairs(value) do
-            assert(key == "defaultPath" or key == "keybinding" or key == "manageKeybinding",
-                "未知配置项：" .. tostring(key))
-            assert(type(item) == "string", key .. " 必须是字符串")
-            config[key] = item
-        end
-        return config
-    end)
-    if not ok then configError = tostring(result) end
-end
+local config, configError = configModule.read()
+local executables = executableModule.new(config.executables)
+tern.on("window_start", function(cx)
+    executables:refresh(cx)
+end)
 
 local active
-local chooseMode, chooseLocation, promptPath, promptName, chooseBranch, chooseBase, create, manage
+local activePrograms = { git = "git", realpath = "realpath", pathEnv = "" }
+local chooseMode, chooseLocation, promptPath, promptName, chooseBranch, chooseBase, create, start, manage
 
 local function finish(flow)
     if active == flow then active = nil end
@@ -64,9 +54,9 @@ local function prompt(cx, flow, opts, callback)
 end
 
 local function runGit(cx, flow, args, callback)
-    local argv = { "git", "-C", flow.root or flow.cwd }
+    local argv = { activePrograms.git, "-C", flow.root or flow.cwd }
     for _, arg in ipairs(args) do table.insert(argv, arg) end
-    tern.process.run(argv, { timeout_ms = 120000 }, function(result, nextCx)
+    tern.process.run(argv, { timeout_ms = 120000, env = { PATH = activePrograms.pathEnv } }, function(result, nextCx)
         if not nextCx or active ~= flow then return end
         guarded(nextCx, flow, function() callback(nextCx, result) end)
     end)
@@ -96,9 +86,9 @@ local function readGit(cx, flow, args, callback)
 end
 
 local function runGitAt(cx, flow, cwd, args, callback)
-    local argv = { "git", "-C", cwd }
+    local argv = { activePrograms.git, "-C", cwd }
     for _, arg in ipairs(args) do table.insert(argv, arg) end
-    tern.process.run(argv, { timeout_ms = 120000 }, function(result, nextCx)
+    tern.process.run(argv, { timeout_ms = 120000, env = { PATH = activePrograms.pathEnv } }, function(result, nextCx)
         if not nextCx or active ~= flow then return end
         guarded(nextCx, flow, function() callback(nextCx, result) end)
     end)
@@ -112,9 +102,9 @@ local function readGitAt(cx, flow, cwd, args, callback)
 end
 
 local function removalRun(cx, flow, cwd, args, callback)
-    local argv = { "git", "-c", "core.fsmonitor=false", "-C", cwd }
+    local argv = { activePrograms.git, "-c", "core.fsmonitor=false", "-C", cwd }
     for _, arg in ipairs(args) do table.insert(argv, arg) end
-    tern.process.run(argv, { timeout_ms = 120000 }, function(result, nextCx)
+    tern.process.run(argv, { timeout_ms = 120000, env = { PATH = activePrograms.pathEnv } }, function(result, nextCx)
         if not nextCx or active ~= flow then return end
         guarded(nextCx, flow, function() callback(nextCx, result) end)
     end)
@@ -123,7 +113,9 @@ end
 local function physicalPath(cx, flow, path, callback)
     removal.require(type(path) == "string" and path:sub(1, 1) == "/",
         "无法确认路径是否为本机绝对路径；拒绝移除。")
-    tern.process.run({ "realpath", path }, { timeout_ms = 30000 }, function(result, nextCx)
+    tern.process.run({ activePrograms.realpath, path }, {
+        timeout_ms = 30000, env = { PATH = activePrograms.pathEnv },
+    }, function(result, nextCx)
         if not nextCx or active ~= flow then return end
         guarded(nextCx, flow, function()
             local value = removal.result(result, "realpath 路径解析")
@@ -504,6 +496,10 @@ local function dangerousRiskItems(review)
 end
 
 local function removeWorktree(cx, flow, worktree, dangerous)
+    if not activePrograms.realpath then
+        fail(cx, flow, "realpath 不可用；拒绝移除 worktree。")
+        return
+    end
     reviewRemoval(cx, flow, worktree, function(reviewCx, before)
         if not dangerous then requireNormalRemoval(before) end
         local function removeAfterReview(confirmCx)
@@ -1181,7 +1177,7 @@ chooseMode = function(cx, flow)
     end)
 end
 
-local function start(cx)
+start = function(cx)
     if active then cx:toast("info", "Kiku 工作树流程正在进行", "请完成或按 Esc 取消当前选择。 "); return end
     if configError then cx:toast("error", "Kiku 配置错误", configError); return end
     if tern.runtime.os ~= "macos" and tern.runtime.os ~= "linux" then
@@ -1276,14 +1272,17 @@ manage = function(cx)
                             items = items,
                         }, function(selectCx, item)
                             flow.selectedWorktree = item.worktree
+                            local actions = {
+                                { label = "打开／切换", id = "open" },
+                                { label = "关闭工作环境", id = "close" },
+                            }
+                            if activePrograms.realpath then
+                                table.insert(actions, { label = "正常移除 worktree", id = "remove" })
+                                table.insert(actions, { label = "危险移除 worktree", id = "dangerous_remove" })
+                            end
                             pick(selectCx, flow, {
                                 placeholder = "选择操作 · " .. item.worktree.path,
-                                items = {
-                                    { label = "打开／切换", id = "open" },
-                                    { label = "关闭工作环境", id = "close" },
-                                    { label = "正常移除 worktree", id = "remove" },
-                                    { label = "危险移除 worktree", id = "dangerous_remove" },
-                                },
+                                items = actions,
                             }, function(actionCx, action)
                                 flow.action = action.id
                                 readWorktrees(actionCx, flow, function(refreshCx)
@@ -1317,13 +1316,75 @@ manage = function(cx)
         end)
     end)
 end
-
+local function startWithGit(cx, names, entry)
+    local host = cx.hosts:current()
+    local session = cx.sessions:current()
+    local focused = cx.session:focused()
+    local sourcePane = focused and cx.session:pane(focused)
+    local sourceCwd = sourcePane and sourcePane.cwd
+    if host.kind ~= "local" or (tern.runtime.os ~= "macos" and tern.runtime.os ~= "linux") then
+        cx:toast("error", "Kiku 助手仅支持 macOS / Linux 本机来源")
+        return
+    end
+    if not sourceCwd or sourceCwd == "" then
+        cx:toast("error", "无法确定当前项目目录", "请聚焦已报告工作目录的终端。")
+        return
+    end
+    executables:check(cx, names, function(nextCx, result)
+        if not nextCx then return end
+        local currentHost = nextCx.hosts:current()
+        local currentSession = nextCx.sessions:current()
+        local currentFocused = nextCx.session:focused()
+        local currentPane = currentFocused and nextCx.session:pane(currentFocused)
+        if currentHost.id ~= host.id or host.kind ~= "local" or currentHost.kind ~= "local"
+            or currentSession.id ~= session.id or currentFocused ~= focused
+            or not sourceCwd or not currentPane or currentPane.cwd ~= sourceCwd then
+            nextCx:toast("error", "Kiku 助手来源已变化", "请从原本机来源重新执行操作。")
+            return
+        end
+        if not result.paths.git then
+            nextCx:toast("error", "Kiku 助手缺少 Git",
+                result.errors.git or "请检查本机 executables.git 配置与 PATH。")
+            return
+        end
+        for name, fallback in pairs(result.fallbacks) do
+            nextCx:toast("info", "Kiku 助手依赖回退",
+                name .. " 已使用 " .. fallback.path .. "（" .. fallback.reason .. "）")
+        end
+        entry(nextCx, result)
+    end)
+end
+local oldStart, oldManage = start, manage
+start = function(cx)
+    if active then cx:toast("info", "Kiku 工作树流程正在进行", "请完成或按 Esc 取消当前选择。"); return end
+    if configError then cx:toast("error", "Kiku 配置错误", configError); return end
+    startWithGit(cx, { "git" }, function(nextCx, result)
+        activePrograms = {
+            git = result.paths.git, realpath = result.paths.realpath,
+            pathEnv = result.pathEnv,
+        }
+        oldStart(nextCx)
+    end)
+end
+manage = function(cx)
+    if active then cx:toast("info", "Kiku 工作树流程正在进行", "请完成或按 Esc 取消当前选择。"); return end
+    if configError then cx:toast("error", "Kiku 配置错误", configError); return end
+    startWithGit(cx, { "git", "realpath" }, function(nextCx, result)
+        activePrograms = {
+            git = result.paths.git, realpath = result.paths.realpath,
+            pathEnv = result.pathEnv,
+        }
+        oldManage(nextCx)
+    end)
+end
 local defaultKey = "ctrl+b>shift+g"
 tern.command({
-    id = "create_worktree", title = "Kiku: 新建 Git worktree", group = "Kiku Worktrees",
-    keys = { config.keybinding ~= "" and config.keybinding or defaultKey }, run = start,
+    id = "create_worktree", title = "Kiku: 新建 Git worktree", group = "Kiku 助手",
+    keys = { config.keybinding ~= "" and config.keybinding or defaultKey },
+    available = function() return executables:ready("git") end, run = start,
 })
 tern.command({
-    id = "manage_worktrees", title = "Kiku: 管理 Git worktree", group = "Kiku Worktrees",
-    keys = config.manageKeybinding ~= "" and { config.manageKeybinding } or {}, run = manage,
+    id = "manage_worktrees", title = "Kiku: 管理 Git worktree", group = "Kiku 助手",
+    keys = config.manageKeybinding ~= "" and { config.manageKeybinding } or {},
+    available = function() return executables:ready("git") end, run = manage,
 })
