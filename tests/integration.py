@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sys
 import subprocess
 import tempfile
 import time
@@ -17,6 +18,7 @@ from dangerous_removal import run as run_dangerous_removal_scenarios
 from management import _has_error_alert, run as run_management_scenarios
 from pending_removal import run as run_pending_removal_scenarios
 from removal import run as run_removal_scenarios
+from dependencies import run as run_dependency_scenarios
 
 PROJECT = Path(__file__).resolve().parents[1]
 ROOT = Path(tempfile.mkdtemp(prefix="tern-kiku-test-")).resolve()
@@ -146,7 +148,7 @@ def record(label):
     print("PASS " + label, flush=True)
 
 
-def main():
+def main(dependencies_only=False):
     REPO.mkdir(parents=True)
     git("init", "-b", "main")
     git("config", "user.name", "Kiku Test")
@@ -168,10 +170,26 @@ def main():
     fixture.mkdir(parents=True)
     (ROOT / "crates" / "tern" / "goldens").mkdir(parents=True)
     (fixture / "kiku.path").write_text(str(PLUGIN) + "\n")
+    configured_tools = ROOT / "configured tools with spaces"
+    if dependencies_only:
+        system_git = shutil.which("git")
+        assert system_git, "Git is required; install it explicitly before running this scenario"
+        configured_tools.mkdir()
+        configured_git = configured_tools / "git executable"
+        configured_git.symlink_to(system_git)
+        (configured_tools / "git").symlink_to(system_git)
+        (PLUGIN / "config.json").write_text(json.dumps({
+            "defaultPath": "", "keybinding": "",
+            "executables": {"git": str(configured_git)},
+        }))
     env = dict(os.environ, TERN_CONFIG_DIR=str(ROOT / "config"),
                STENCIL_FIXTURE_ROOT=str(ROOT / "crates" / "tern"), STENCIL_LOG_DIR=str(ROOT / "logs"))
+    if dependencies_only:
+        env["PATH"] = str(configured_tools)
+    tern = shutil.which("tern")
+    assert tern, "Tern is required; install it explicitly before running this scenario"
     log = open(ROOT / "serve.log", "w")
-    server = subprocess.Popen(["tern", "serve", "--control", str(SOCKET), "--out", str(ROOT / "shots")],
+    server = subprocess.Popen([tern, "serve", "--control", str(SOCKET), "--out", str(ROOT / "shots")],
                               cwd=ROOT, env=env, stdout=log, stderr=log)
     print("Artifacts: " + str(ROOT), flush=True)
     try:
@@ -181,6 +199,15 @@ def main():
             assert time.monotonic() < deadline, "Tern startup timeout"
             time.sleep(0.1)
         ctl("plugins fixtures")
+        if dependencies_only:
+            harness = SimpleNamespace(
+                repo=REPO, plugin=PLUGIN, root=ROOT, git=git, ctl=ctl, picker=picker,
+                type_text=type_text, replace_text=replace_text, begin=begin, name=name,
+                created=created, state=state, wait_for=wait_for, lua=lua, lua_json=lua_json,
+                open_repo=open_repo, record=record,
+            )
+            run_dependency_scenarios(harness)
+            return
         action = lua('return cx.actions:describe("plugin.kiku.create_worktree")')
         assert "available = true" in action and "kiku" in action, action
         management_action = lua('return cx.actions:describe("plugin.kiku.manage_worktrees")')
@@ -497,4 +524,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main("--dependencies-only" in sys.argv)
