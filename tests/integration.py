@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import shutil
 import sys
+import shlex
 import subprocess
 import tempfile
 import time
@@ -152,10 +153,11 @@ def record(label):
     print("PASS " + label, flush=True)
 
 
-def main(dependencies_only=False, tools_only=False, restart_only=False):
+def main(dependencies_only=False, tools_only=False, restart_only=False,
+         lazygit_only=False, lazygit_missing=None, lazygit_restart_only=False):
     global ROOT, SOCKET, REPO, PLUGIN, TERN_BIN, CTL_ENV
     native = None
-    if tools_only:
+    if tools_only or lazygit_only or lazygit_missing:
         native = NativeWindow(ROOT)
         native.check_desktop()
         SOCKET = native.socket
@@ -182,7 +184,8 @@ def main(dependencies_only=False, tools_only=False, restart_only=False):
     (fixture / "kiku.path").write_text(str(PLUGIN) + "\n")
     configured_tools = ROOT / "configured tools with spaces"
     path_tools = ROOT / "launch PATH"
-    if dependencies_only or tools_only or restart_only:
+    if (dependencies_only or tools_only or restart_only or lazygit_only or lazygit_missing
+            or lazygit_restart_only):
         path_tools.mkdir()
         if dependencies_only:
             system_git = shutil.which("git")
@@ -194,8 +197,72 @@ def main(dependencies_only=False, tools_only=False, restart_only=False):
                 "defaultPath": "", "keybinding": "",
                 "executables": {"git": str(configured_git)},
             }
+        elif lazygit_only or lazygit_restart_only:
+            system_git = shutil.which("git")
+            system_lazygit = shutil.which("lazygit")
+            assert system_git and system_lazygit, "Git and lazygit are required for this real TUI scenario"
+            configured_tools.mkdir()
+            configured_git = configured_tools / "configured git"
+            configured_lazygit = configured_tools / "configured lazygit ' $( : >kiku-injected ) ;"
+            git_log = ROOT / "configured git invocations"
+            lazygit_log = ROOT / "lazygit executable invocations"
+            configured_git.write_text(
+                "#!/bin/sh\n"
+                f"printf '%s\\t%s\\n' \"$PATH\" \"$(/bin/ps -p $PPID -o comm=)\" >> {shlex.quote(str(git_log))}\n"
+                f"exec {shlex.quote(str(system_git))} \"$@\"\n"
+            )
+            configured_git.chmod(0o700)
+            (path_tools / "git").write_text(configured_git.read_text())
+            (path_tools / "git").chmod(0o700)
+            lazygit_wrapper = (
+                "#!/bin/sh\n"
+                f"printf '%s\\t%s\\t%s\\n' \"$0\" \"$*\" \"$$\" >> {shlex.quote(str(lazygit_log))}\n"
+                f"exec {shlex.quote(str(system_lazygit))} --use-config-dir "
+                f"{shlex.quote(str(ROOT / 'lazygit config'))} \"$@\"\n"
+            )
+            configured_lazygit.write_text(lazygit_wrapper)
+            configured_lazygit.chmod(0o700)
+            path_lazygit = path_tools / "lazygit"
+            path_lazygit.write_text(lazygit_wrapper)
+            path_lazygit.chmod(0o700)
+            config = {
+                "defaultPath": "", "keybinding": "", "lazygitKeybinding": "",
+                "executables": {"git": str(configured_git), "lazygit": str(configured_lazygit)},
+            }
+        elif lazygit_missing:
+            system_git = shutil.which("git")
+            system_lazygit = shutil.which("lazygit")
+            if lazygit_missing == "git":
+                assert system_lazygit, "lazygit is required to isolate the missing-Git case"
+            else:
+                assert system_git, "Git is required to isolate the missing-lazygit case"
+            configured_tools.mkdir()
+            configured_git = configured_tools / "configured git"
+            configured_lazygit = configured_tools / "configured lazygit"
+            if system_git:
+                git_wrapper = (
+                    "#!/bin/sh\n"
+                    f"exec {shlex.quote(str(system_git))} \"$@\"\n"
+                )
+                configured_git.write_text(git_wrapper)
+                configured_git.chmod(0o700)
+            if system_lazygit:
+                lazygit_wrapper = (
+                    "#!/bin/sh\n"
+                    f"exec {shlex.quote(str(system_lazygit))} --use-config-dir "
+                    f"{shlex.quote(str(ROOT / 'lazygit config'))} \"$@\"\n"
+                )
+                configured_lazygit.write_text(lazygit_wrapper)
+                configured_lazygit.chmod(0o700)
+            config = {
+                "defaultPath": "", "keybinding": "", "lazygitKeybinding": "",
+                "executables": {
+                    "git": str(ROOT / "missing configured git") if lazygit_missing == "git" else str(configured_git),
+                    "lazygit": str(ROOT / "missing configured lazygit") if lazygit_missing == "lazygit" else str(configured_lazygit),
+                },
+            }
         else:
-            config = {"defaultPath": "", "keybinding": ""}
+            config = {"defaultPath": "", "keybinding": "", "lazygitKeybinding": ""}
         (PLUGIN / "config.json").write_text(json.dumps(config))
     if native:
         native.extra_env.update({"STENCIL_FIXTURE_ROOT": str(ROOT / "crates" / "tern"),
@@ -211,7 +278,7 @@ def main(dependencies_only=False, tools_only=False, restart_only=False):
                    TERN_DAEMON_SOCKET=str(ROOT / "daemon.sock"),
                    STENCIL_FIXTURE_ROOT=str(ROOT / "crates" / "tern"),
                    STENCIL_LOG_DIR=str(ROOT / "logs"))
-        if dependencies_only or restart_only:
+        if dependencies_only or restart_only or lazygit_restart_only:
             env["PATH"] = str(path_tools)
         tern = shutil.which("tern")
         assert tern, "Tern is required; install it explicitly before running this scenario"
@@ -231,7 +298,8 @@ def main(dependencies_only=False, tools_only=False, restart_only=False):
                 assert time.monotonic() < deadline, "Tern startup timeout"
                 time.sleep(0.1)
         ctl("plugins run reload_plugins" if native else "plugins fixtures")
-        if dependencies_only or tools_only or restart_only:
+        if (dependencies_only or tools_only or restart_only or lazygit_only or lazygit_missing
+                or lazygit_restart_only):
             scenario_ctl = ctl
             if native:
                 scenario_ctl = lambda command: (
@@ -251,6 +319,27 @@ def main(dependencies_only=False, tools_only=False, restart_only=False):
             elif restart_only:
                 run_tool_restart_scenario(harness)
                 (ROOT / "tools-restart-report.json").write_text(json.dumps(
+                    {"passed": passed, "count": len(passed), "artifacts": str(ROOT)},
+                    ensure_ascii=False, indent=2,
+                ))
+            elif lazygit_restart_only:
+                from lazygit import run_restart as run_lazygit_restart
+                run_lazygit_restart(harness)
+                (ROOT / "lazygit-restart-report.json").write_text(json.dumps(
+                    {"passed": passed, "count": len(passed), "artifacts": str(ROOT)},
+                    ensure_ascii=False, indent=2,
+                ))
+            elif lazygit_only:
+                from lazygit import run as run_lazygit_scenarios
+                run_lazygit_scenarios(harness)
+                (ROOT / "lazygit-report.json").write_text(json.dumps(
+                    {"passed": passed, "count": len(passed), "artifacts": str(ROOT)},
+                    ensure_ascii=False, indent=2,
+                ))
+            elif lazygit_missing:
+                from lazygit import run_missing as run_missing_lazygit_scenarios
+                run_missing_lazygit_scenarios(harness, lazygit_missing)
+                (ROOT / "lazygit-missing-report.json").write_text(json.dumps(
                     {"passed": passed, "count": len(passed), "artifacts": str(ROOT)},
                     ensure_ascii=False, indent=2,
                 ))
@@ -588,5 +677,16 @@ if __name__ == "__main__":
     arguments = set(sys.argv[1:])
     if "--tools-only" in arguments:
         subprocess.run([sys.executable, str(Path(__file__).resolve()), "--tool-restart-only"], check=True)
-    main(dependencies_only="--dependencies-only" in arguments,
-         tools_only="--tools-only" in arguments, restart_only="--tool-restart-only" in arguments)
+    if "--lazygit-restart-only" in arguments:
+        main(lazygit_restart_only=True)
+    elif "--lazygit-only" in arguments:
+        subprocess.run([sys.executable, str(Path(__file__).resolve()),
+                        "--lazygit-restart-only"], check=True)
+        main(lazygit_only=True)
+    elif "--lazygit-missing-git-only" in arguments:
+        main(lazygit_missing="git")
+    elif "--lazygit-missing-lazygit-only" in arguments:
+        main(lazygit_missing="lazygit")
+    else:
+        main(dependencies_only="--dependencies-only" in arguments,
+             tools_only="--tools-only" in arguments, restart_only="--tool-restart-only" in arguments)
