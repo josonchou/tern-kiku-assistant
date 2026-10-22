@@ -489,9 +489,11 @@ lazygit 的真实 `--version` 探测也会调用 Git，不能把第一条 Git �
 
 ### 剩余风险（未解决）
 
-根布局使 `.git` 回到被监听目录内。此前隔离实验已证明：链接包内的 `.git` 元数据变化会重载插件。因此在**本仓库自身**打开 lazygit（lazygit 会刷新该仓库的 Git 状态）仍可能触发重载，清空运行期工具登记，表现为不自动聚焦、`q / Shift+Q` 报“未识别当前窗格”。本次回迁不声称消除该问题，也未放宽身份校验或重新认领旧实例。`tests/lazygit.py` 的“包含插件包的仓库”回归覆盖外层仓库的 Git 元数据，不等于根布局下本仓库自身的该场景。
+根布局使 `.git` 回到被监听目录内。此前隔离实验已证明：链接包内的 `.git` 元数据变化会重载插件。因此在**本仓库自身**打开 lazygit（lazygit 会刷新该仓库的 Git 状态）仍可能触发重载：重载瞬间可能丢失聚焦；现在插件会在重载后按记录认领 pane 仍存在的工具，使 `q / Shift+Q` 重新可用，但这不消除重载本身。`tests/lazygit.py` 的“包含插件包的仓库”回归覆盖外层仓库的 Git 元数据，不等于根布局下本仓库自身的该场景。
 
-## `q` 触发 await 预算超限（2026-10-22）
+## `q` 触发 await 预算超限（2026-10-22，已被“工具身份改按 pane 生命周期”取代）
+
+> 本节的 10 ms 切片轮询已删除；身份改为只看 pane ID，窗口侧不再等待。保留本节作为问题定位记录。
 
 用户按 `Ctrl+B → q` 时窗口提示 “Plugin Kiku 助手: await failed / runtime error: tern: await exceeded 50 ms”。窗口日志确认 `plugin hook exceeded its budget; disabled until reload plugin="kiku" hook="await"`，即该 hook 被禁用直到重载，后续调用会被静默跳过。
 
@@ -522,3 +524,33 @@ lazygit 的真实 `--version` 探测也会调用 Git，不能把第一条 Git �
 
 限制：`--tool-restart-only` 在本机仍然因既有的 `process` 钩子超过 50 ms 而失败；用同一场景跑未修改的 `HEAD` 快照得到相同结果，属本机既有环境限制，与本次改动无关。另经隔离实验确认，无头 `serve` 只在窗口活动时才服务插件定时器，因此该修复没有采用定时器链。
 
+
+## 工具身份改按 pane 生命周期（2026-10-22）
+
+用户明确要求工具（lazygit / 临时终端）归属只认 pane ID 的生命周期，并去掉窗口侧进程代次等待。本节取代此前所有以 PID、父进程、启动代次或工具内容判定归属的验证结论。
+
+### 实现
+
+- `lib/tool_identity.luau`：删除 `verifyProcess`、`verifyTogether`、`rememberProcess`、`freshSample` 及全部 `cx.procs` 采样。保留 `launch`／`spawn`／`newToken`／`marker`／`save`／`records`／`remove`；私有 `tool-start` 目录与 PID 只作排障，不参与放行。
+- `lib/tools.luau`：`managedNow` 只核对 pane 存在（`terminal` 或 `agent`）、记录的主机／会话与注册表一致性；删除 `verifyManaged`、启动握手与 `settle` 轮询。lazygit 改为 `layout:split` 时直接以 `Launch.command` 启动（agent pane），临时终端仍用交互 shell；创建后立即呈现，不再等待提示符。
+- `q` 按 pane ID `park`；`Shift+Q` 的确认框展示实时标题、目录与前台命令（或“无前台命令”），确认后按 pane ID 关闭。
+- 插件加载后的第一条命令按 `tools/*.json` 认领 pane 仍存在的工具（pane 已消失的记录忽略且不删除）；认领的 lazygit 按 token 还原 Git bridge 路径，关闭时照常清理。
+- `lib/lazygit_launch.luau`：新增 `directory(token)`，供创建与认领共用同一 bridge 路径。
+
+### 已执行验证
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 代码级工具场景 `python3 tests/code_validation.py --luau /tmp/luau743/luau` | 42 个场景、258 条断言通过；含 `reuse_restores_layout_without_process_sampling`、`restarted_shell_pane_remains_manageable`、`end_confirmation_reports_live_pane`、`reload_adopts_record_with_live_pane`、`lazygit_launches_through_launch_command`、`frozen_process_sample_never_blocks_actions` 等；断言 `state.samples == 0`、`state.settleCalls == 0`，证明工具路径不再采样或等待 |
+| 真实 lazygit 原生回归 `--lazygit-only` | 10 组 PASS，含 `Launch.command` 真实 TUI、同源复用、跨 tab 隔离、重载后按 pane 认领、失败卡片按 pane 结束并清理 bridge；证据目录 `…/tern-kiku-test-kqk1m4_9`（Restart）、`…/tern-kiku-test-i5x_3t0j`（主套件） |
+| 无头 lazygit Restart `--lazygit-restart-only` | PASS：Tern 原生 Restart 重新执行同一 pane 的命令；该 pane 仍可复用、`q` 停放、恢复与确认结束，未重复启动 lazygit；证据目录 `…/tern-kiku-test-pbvrz7z5` |
+| 原生 GUI 工具场景 `main(tools_only=True)` 的 GUI 部分 | 12 组 PASS：非 Git 来源、同源复用／跨 tab、来源关闭保活、确认结束、Cmd+W、重载后认领停放工具、普通 pane 前缀文本不能认领、post-reload pane 管理、跨会话不管理、孤儿恢复、非本机拒绝；证据目录 `…/tern-kiku-test-ifq7x4vv` |
+| Luau 编译 | `luau-compile --null` 对 `window.luau`、`host.luau`、`lib/*.luau`、夹具与场景脚本通过 |
+| Luau 静态分析 | 0 错误；仅保留 `tool_identity.luau` 既有的 `TableOperations` 告警 |
+| Python 语法 | 修改后的 `tests/*.py` 通过 |
+
+### 限制
+
+- `--tools-only` 会在子进程里先执行 `--tool-restart-only`；后者在本机仍因既有的 `process` 钩子超过 50 ms 被 Tern 禁用插件（`tern-kiku-test-96eiuupt/logs/tern-serve.log:10-11`：`plugin hook exceeded its budget … hook="process"`），因此整条命令无法完成，`tests/tools.py::run_restart` 的新契约断言未在本机原生执行。该限制与本次改动无关，未放宽时限、未加重载或重试；GUI 部分按同一 `main(tools_only=True)` 代码路径单独执行并通过 12 组，终端工具 Restart 的等价行为由代码级场景与 lazygit Restart 原生场景覆盖。
+- 自动化未覆盖 Linux 与真实远程主机；`Launch.command` 的 agent 窗格只在 macOS / Tern 0.9.5 实测。
+- 契约接受的后果：原生 Restart 后的空 shell 仍可被收起／关闭；`Shift+Q` 关闭的可能已不是原本运行的程序。原生测试以确认框与实时 pane 状态、进程存活断言验收这一点。

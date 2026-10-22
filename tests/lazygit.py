@@ -96,6 +96,8 @@ def run_containing_repository(h, keybinding, lazygit_log):
         return False
 
     h.wait_for(focused_tool, "containing-repository lazygit opens with automatic PiP focus")
+    h.wait_for(lambda _: len(lazygit_launches(lazygit_log)) > launch_count,
+               "containing-repository lazygit actually starts")
     launches = lazygit_launches(lazygit_log)[launch_count:]
     assert len(launches) == 1, launches
     pane_id, pid = opened["pane"], launches[0][1]
@@ -168,7 +170,8 @@ def run(h):
             return False
         assert len(new) == 1, panes
         pane = new[0]
-        assert pane.get("kind") == "terminal", pane
+        # A Launch.command pane is an agent pane; both are native terminal surfaces.
+        assert pane.get("kind") in ("terminal", "agent"), pane
         if pane.get("floating") is not True or pane.get("focused") is not True:
             return False
         output = h.lua_json(
@@ -439,20 +442,19 @@ def run(h):
     assert "README.md" in str(failed_view), failed_view
     assert failure_bridge.exists(), "Unconfirmed failed instance removed its live-process bridge"
     h.ctl("shot lazygit-failure-retained")
-    failed_panes_before = {pane["pane"] for pane in h.lua_json("cx.session:panes()")}
+    # A failed program still owns its pane: ending it asks and shows live state.
     h.lua(f"cx.layout:focus({failure_pane}); return true")
-    h.ctl("plugins run plugin.kiku.open_terminal")
-    h.wait_for(lambda _: _has_error_alert(h.ctl("tree")),
-               "failed lazygit identity refuses to become a terminal source")
-    assert {pane["pane"] for pane in h.lua_json("cx.session:panes()")} == failed_panes_before
-    assert h.lua_json(f"cx.session:pane({failure_pane})").get("exited") is not None
-    assert failure_bridge.exists()
-    h.lua(f"cx.layout:close({failure_pane}); return true")
+    h.ctl("key ctrl+b")
+    h.ctl("key shift+q")
+    h.wait_for(lambda state: bool(state.get("picker")),
+               "failed lazygit still asks before ending")
+    h.ctl("picker down 1")
+    h.ctl("key enter")
     h.wait_for(lambda _: h.lua_json(f"cx.session:pane({failure_pane})") is None,
-               "native Tern close disposes only the failed lazygit fixture")
+               "confirmed end closes the failed lazygit pane")
     h.wait_for(lambda _: not failure_bridge.exists(),
-               "confirmed native pane close cleans the ended lazygit bridge")
-    h.record("real failure remains viewable and cannot be adopted as a terminal owner")
+               "closing the failed lazygit pane cleans its bridge")
+    h.record("real failure remains viewable and is ended by its pane record")
 
     run_containing_repository(h, keybinding, lazygit_log)
 
@@ -492,38 +494,31 @@ def run(h):
     h.lua(f"cx.layout:focus({reload_source['pane']}); return true")
     h.ctl("key ctrl+b")
     h.ctl("key alt+g")
-    h.wait_for(lambda _: _has_error_alert(h.ctl("tree")),
-               "post-reload shortcut refuses duplicate ownership of the preserved lazygit")
-    assert {pane["pane"] for pane in h.lua_json("cx.session:panes()")} == reload_panes_before
-    reload_after_refusal = h.lua_json(f"cx.session:pane({reload_pane})")
-    assert all(reload_after_refusal.get(key) == reload_before.get(key)
-               for key in ("pane", "tab", "cwd", "floating", "parked")), (
-        reload_before, reload_after_refusal
+    h.wait_for(
+        lambda _: bool((pane := h.lua_json(f"cx.session:pane({reload_pane})"))
+                       and pane.get("focused") is True and pane.get("floating") is True),
+        "post-reload shortcut reuses the adopted lazygit pane",
     )
+    assert {pane["pane"] for pane in h.lua_json("cx.session:panes()")} == reload_panes_before
+    assert h.lua_json(f"cx.session:pane({reload_pane})").get("pane") == reload_before.get("pane")
     assert reload_bridge.exists() and process_alive(reload_pid)
     assert len(lazygit_launches(lazygit_log)) == launch_count_before_reload, \
         "Plugin reload or shortcut started a duplicate lazygit process"
-    h.wait_for(lambda _: not _has_error_alert(h.ctl("tree")),
-               "duplicate-open refusal clears before restore check")
     h.ctl("plugins run plugin.kiku.restore_tools")
     h.wait_for(
         lambda state: not state.get("picker") and _has_info_toast(h.ctl("tree")),
-        "reloaded plugin does not expose old lazygit as a current-VM restorable tool",
+        "restore lists nothing because the adopted lazygit is visible, not parked",
     )
     h.ctl("shot lazygit-after-plugin-reload")
     assert reload_bridge.exists() and process_alive(reload_pid)
     h.lua(f"cx.layout:close({reload_pane}); return true")
     h.wait_for(lambda _: h.lua_json(f"cx.session:pane({reload_pane})") is None,
-               "native Tern close ends the unclaimed post-reload lazygit")
+               "native Tern close ends the adopted post-reload lazygit")
     h.wait_for(lambda _: not process_alive(reload_pid),
-               "native close confirms the old lazygit process has exited")
-    assert reload_bridge.exists(), "reloaded plugin improperly cleaned an unclaimed old bridge"
-    reload_link = reload_bridge / "git"
-    assert reload_link.is_symlink(), reload_link
-    reload_link.unlink()
-    reload_bridge.rmdir()
-    assert not reload_bridge.exists(), reload_bridge
-    h.record("plugin reload preserves the old lazygit and bridge without taking ownership or duplicating it")
+               "native close confirms the adopted lazygit process has exited")
+    h.wait_for(lambda _: not reload_bridge.exists(),
+               "closing the adopted pane cleans its bridge")
+    h.record("plugin reload adopts the existing lazygit pane without relaunching it")
 
     h.open_repo(h.repo)
     dependency_git_start = len(git_log.read_text().splitlines())
@@ -689,26 +684,55 @@ def run_restart(h):
     )
     failed = h.lua_json(f"cx.session:pane({pane_id})")
     assert failed.get("exited") is not None, failed
+    restart_baseline = len(lazygit_launches(lazygit_log))
     h.ctl("key enter")
     h.wait_for(
         lambda _: bool((pane := h.lua_json(f"cx.session:pane({pane_id})"))
-                       and pane.get("exited") is None and pane.get("at_prompt") is True),
-        "Tern Restart creates a new shell generation in the failed lazygit pane",
+                       and pane.get("exited") is None),
+        "Tern Restart relaunches the command in the same lazygit pane",
     )
-    restarted = h.lua_json(f"cx.session:pane({pane_id})")
+    h.wait_for(
+        lambda _: len(lazygit_launches(lazygit_log)) > restart_baseline,
+        "Tern Restart actually relaunches the real lazygit program",
+    )
     launch_count = len(lazygit_launches(lazygit_log))
+    # The pane id is the identity, so the relaunched pane is still the tool.
     h.lua(f"cx.layout:focus({pane_id}); return true")
     h.ctl("plugins run plugin.kiku.open_lazygit")
-    h.wait_for(lambda _: _has_error_alert(h.ctl("tree")),
-               "lazygit open refuses the unverified restarted generation")
+    h.wait_for(
+        lambda _: h.lua_json(f"cx.session:pane({pane_id})").get("focused") is True
+        and h.lua_json(f"cx.session:pane({pane_id})").get("floating") is True,
+        "reopening after Restart reuses the same lazygit pane",
+    )
     assert {pane["pane"] for pane in h.lua_json("cx.session:panes()")} == before | {pane_id}, \
-        "Refusing an unknown peer must not create a terminal pane"
-    after = h.lua_json(f"cx.session:pane({pane_id})")
-    assert all(after.get(key) == restarted.get(key)
-               for key in ("pane", "tab", "cwd", "floating", "parked")), (restarted, after)
-    assert after.get("at_prompt") is True and bridge.exists()
-    assert len(lazygit_launches(lazygit_log)) == launch_count
-    h.record("Restarted lazygit peer refusal creates no pane and leaves its generation untouched")
+        "Reuse must not create a duplicate pane"
+    assert len(lazygit_launches(lazygit_log)) == launch_count, \
+        "Reuse must not launch lazygit again"
+    h.ctl("key ctrl+b")
+    h.ctl("key q")
+    h.wait_for(
+        lambda _: h.lua_json(f"cx.session:pane({pane_id})").get("parked") is True,
+        "hide parks the relaunched lazygit pane",
+    )
+    h.ctl("plugins run plugin.kiku.restore_tools")
+    h.wait_for(lambda state: bool(state.get("picker")), "restore lists the parked lazygit tool")
+    h.ctl("key enter")
+    h.wait_for(
+        lambda _: bool((pane := h.lua_json(f"cx.session:pane({pane_id})"))
+                       and pane.get("parked") is not True and pane.get("focused") is True),
+        "restore resumes the same lazygit pane",
+    )
+    h.ctl("key ctrl+b")
+    h.ctl("key shift+q")
+    h.wait_for(lambda state: bool(state.get("picker")),
+               "relaunched lazygit asks before ending")
+    h.ctl("picker down 1")
+    h.ctl("key enter")
+    h.wait_for(
+        lambda _: h.lua_json(f"cx.session:pane({pane_id})") is None,
+        "confirmed end closes the relaunched lazygit pane",
+    )
+    h.record("Restarted lazygit pane stays reusable, parkable, restorable and endable by pane id")
 
 
 def run_missing(h, missing):

@@ -29,33 +29,24 @@ end
 
 local function liveTool(cx, tool)
     local pane = cx.session:pane(tool.pane)
-    if not pane or pane.kind ~= "terminal" then return nil end
+    if not pane then return nil end
+    -- Terminal tools are interactive shells; a lazygit tool started with
+    -- Launch.command is an agent pane. Both are native terminal surfaces.
+    if pane.kind ~= "terminal" and pane.kind ~= "agent" then return nil end
     return pane
 end
 
+-- Ownership is the recorded pane ID plus its recorded host, session, tab and
+-- launch directory. Process generation, PID and pane content are deliberately
+-- not consulted: a natively restarted shell keeps the same pane ID and stays the
+-- same tool under this contract.
 local function managedNow(cx, tool)
     local host = cx.hosts:current()
     local pane = liveTool(cx, tool)
-    return cx.sessions:current().id == tool.session and host.id == tool.host and host.kind == "local"
-        and pane ~= nil and pane.exited == nil and tool.identityVerified == true
+    return host.kind == "local" and host.id == tool.host
+        and cx.sessions:current().id == tool.session
+        and pane ~= nil
         and tools[tool.key] == tool and byPane[tool.pane] == tool
-end
-
-local function verifyManaged(cx, tool, callback, source)
-    if not managedNow(cx, tool) or (source and not managedNow(cx, source)) then
-        callback(false, cx)
-        return
-    end
-    local function complete(verified, nextCx)
-        if not nextCx then return end
-        callback(verified and managedNow(nextCx, tool)
-            and (not source or managedNow(nextCx, source)), nextCx)
-    end
-    if source and source ~= tool then
-        identity.verifyTogether(cx, tool, source, tool.pane, complete)
-    else
-        identity.verifyProcess(cx, tool, tool.pane, complete)
-    end
 end
 
 local function requestValid(cx, request)
@@ -120,17 +111,13 @@ local function displayTool(cx, tool, request)
     return true
 end
 
-local function focusTool(cx, tool, done)
+local function focusTool(cx, tool)
     local request = tool.request
-    verifyManaged(cx, tool, function(verified, nextCx)
-        if nextCx and verified and tools[tool.key] == tool and byPane[tool.pane] == tool
-            and request and requestValid(nextCx, request) then
-            displayTool(nextCx, tool, request)
-        elseif nextCx then
-            nextCx:toast("error", "工具身份或来源已变化", "未恢复或移动任何窗格。")
-        end
-        if done then done() end
-    end, request and request.sourceTool)
+    if not request or not requestValid(cx, request) then
+        cx:toast("error", "来源已变化", "未恢复或移动任何窗格。")
+        return false
+    end
+    return displayTool(cx, tool, request)
 end
 
 local function ownerFor(cx)
@@ -153,154 +140,39 @@ local function persist(tool)
     return identity.save({
         token = tool.token, pane = tool.pane,
         host = tool.host, session = tool.session, cwd = tool.cwd,
-        originTab = tool.originTab, kind = tool.kind,
-        pid = tool.pid, started = tool.started,
-        parent = tool.parent, parentStarted = tool.parentStarted,
+        originTab = tool.originTab, kind = tool.kind, pid = tool.pid,
     })
 end
 
 
 
-local finishStartup
 local function presentTool(cx, tool)
-    focusTool(cx, tool, function() finishStartup(tool) end)
-end
-finishStartup = function(tool)
-    if tool.programs and not tool.launchSent and tool.programs.gitDirectory then
-        lazygitLaunch.cleanup(tool.programs.gitDirectory)
-        tool.programs.gitDirectory = nil
-    end
+    focusTool(cx, tool)
     if tool.finish then tool.finish() end
 end
 
--- A window call has a 50 ms budget, so the handshake must never await a long
--- settle: while the tool's shell runs a full-screen program such as lazygit,
--- settle() only returns at its deadline. Poll in short slices instead. The
--- shell records its own PID in the private launch directory before exec, so
--- nothing is typed into the pane.
-local HANDSHAKE_POLL_MS = 10
-
-local function handshake(cx, tool, remaining)
-    local check
-    local function wait(nextCx, left)
-        nextCx.session:settle(tool.pane, HANDSHAKE_POLL_MS):next(function(_, settleError, settleCx)
-            if not settleCx or settleError then finishStartup(tool); return end
-            check(settleCx, left)
-        end)
+-- Nothing is typed into tool panes any more: a terminal tool is the real shell
+-- and a lazygit tool starts through Launch.command. The private launch
+-- directory is read once for diagnostics only, so creation never awaits.
+local function recordStartupDetails(cx, tool)
+    if tool.kind ~= "terminal" then return end
+    local marker, markerError = identity.marker(cx, tool.pane, tool.token)
+    if markerError then
+        cx:toast("error", "工具启动未完成", markerError)
+        return
     end
-    local function afterLaunch(nextCx, slices, done)
-        local function step(currentCx, left)
-            if not currentCx or left == 0 then done(currentCx); return end
-            currentCx.session:settle(tool.pane, HANDSHAKE_POLL_MS):next(function(_, settleError, settleCx)
-                if not settleCx or settleError then done(nil); return end
-                step(settleCx, left - 1)
-            end)
-        end
-        step(nextCx, slices)
+    if marker and marker.pid then
+        tool.pid = marker.pid
+        persist(tool)
     end
-    check = function(nextCx, left)
-        if not nextCx then finishStartup(tool); return end
-        if tools[tool.key] ~= tool or byPane[tool.pane] ~= tool then
-            finishStartup(tool)
-            return
-        end
-        if not requestValid(nextCx, tool.request) then
-            finishStartup(tool)
-            return
-        end
-        local pane = liveTool(nextCx, tool)
-        if not pane then finishStartup(tool); return end
-        if pane.exited ~= nil or left == 0 then
-            finishStartup(tool)
-            nextCx:toast("error", "工具身份未确认", "等待新 shell 或身份记录超时；窗格仍保留，不重复启动。")
-            return
-        end
-        if pane.at_prompt ~= true or pane.busy == true or pane.running ~= nil then
-            wait(nextCx, left - 1)
-            return
-        end
-        local marker, markerError = identity.marker(nextCx, tool.pane, tool.token)
-        if markerError then
-            finishStartup(tool)
-            nextCx:toast("error", "工具身份未确认", markerError)
-            return
-        end
-        if not marker or not marker.pid then
-            wait(nextCx, left - 1)
-            return
-        end
-        identity.rememberProcess(nextCx, tool, marker.pid, tool.pane, function(ok, verifiedCx)
-            if not verifiedCx or tools[tool.key] ~= tool or byPane[tool.pane] ~= tool then
-                finishStartup(tool)
-                return
-            end
-            if not liveTool(verifiedCx, tool) or not requestValid(verifiedCx, tool.request) then
-                finishStartup(tool)
-                return
-            end
-            if not ok then
-                wait(verifiedCx, left - 1)
-                return
-            end
-            tool.identityVerified = true
-            local saved, saveError = persist(tool)
-            if not saved then
-                verifiedCx:toast("error", "工具身份无法持久化",
-                    "重载后由 Tern 原生管理；插件不会认领旧实例。" .. tostring(saveError))
-            end
-            if tool.kind == "lazygit" and tool.programs and not tool.launchSent then
-                tool.launchSent = true
-                local command = lazygitLaunch.command(
-                    tool.programs.gitDirectory, tool.programs.lazygit, tool.programs.pathEnv)
-                verifiedCx:run(tool.pane, command .. "\r")
-                afterLaunch(verifiedCx, 50, function(finalCx)
-                    if not finalCx then if tool.finish then tool.finish() end; return end
-                    local finalHost = finalCx.hosts:current()
-                    local finalSession = finalCx.sessions:current()
-                    local finalPane = liveTool(finalCx, tool)
-                    if tools[tool.key] ~= tool or byPane[tool.pane] ~= tool
-                        or finalHost.kind ~= "local" or finalHost.id ~= tool.host
-                        or finalSession.id ~= tool.session or not finalPane then
-                        if tool.finish then tool.finish() end
-                        return
-                    end
-                    if finalPane.exited ~= nil then
-                        if tool.finish then tool.finish() end
-                        lazygitLaunch.cleanup(tool.programs.gitDirectory)
-                        tool.programs.gitDirectory = nil
-                        finalCx:toast("error", "lazygit 启动失败", "窗格保留；可由 Tern 原生查看错误。")
-                        return
-                    end
-                    if not requestValid(finalCx, tool.request) then
-                        if tool.finish then tool.finish() end
-                        return
-                    end
-                    verifyManaged(finalCx, tool, function(stillVerified, verifiedCx)
-                        if not verifiedCx then if tool.finish then tool.finish() end; return end
-                        if not stillVerified then
-                            if tool.finish then tool.finish() end
-                            verifiedCx:toast("error", "lazygit 身份未确认", "窗格保留；请交由 Tern 原生管理。")
-                            return
-                        end
-                        presentTool(verifiedCx, tool)
-                    end)
-                end)
-            else
-                presentTool(verifiedCx, tool)
-            end
-        end)
-    end
-    check(cx, remaining)
 end
 
-local function removeTool(tool, ended)
+local function removeTool(tool, _ended)
     if tools[tool.key] ~= tool then return end
     tools[tool.key] = nil
     if byPane[tool.pane] == tool then byPane[tool.pane] = nil end
     identity.remove(tool.token)
-    if tool.programs and (ended or not tool.launchSent) then
-        lazygitLaunch.cleanup(tool.programs.gitDirectory)
-    end
+    if tool.programs then lazygitLaunch.cleanup(tool.programs.gitDirectory) end
 end
 
 local function needsObservation()
@@ -351,6 +223,51 @@ local function scheduleWatcher(cx)
     end)
 end
 
+-- The registry lives in this window VM, so a reload starts empty. Rebuild it
+-- from the persisted records for panes that still exist: the record's host,
+-- session, tab, launch directory and pane ID are the whole ownership proof.
+-- Records whose pane is gone are ignored, and never deleted, because the same
+-- record store is shared with other windows.
+local hydrated = false
+
+local function adoptRecords(cx)
+    if hydrated then return end
+    hydrated = true
+    local host = cx.hosts:current()
+    if host.kind ~= "local" then return end
+    for _, record in ipairs(identity.records()) do
+        if not record.unreadable and record.host == host.id
+            and type(record.pane) == "number" and type(record.session) == "number"
+            and type(record.cwd) == "string" and record.cwd:sub(1, 1) == "/" then
+            local pane = cx.session:pane(record.pane)
+            if pane and (pane.kind == "terminal" or pane.kind == "agent")
+                and not byPane[record.pane] then
+                local kind = record.kind or "terminal"
+                local tab = record.originTab or pane.tab
+                if type(tab) == "number" then
+                    local key = tupleKey(tab, record.cwd, kind)
+                    if not tools[key] then
+                        local tool = {
+                            pane = record.pane, key = key, originTab = tab,
+                            kind = kind, host = record.host, session = record.session,
+                            cwd = record.cwd, token = record.token, pid = record.pid,
+                            adopted = true,
+                        }
+                        if kind == "lazygit" then
+                            -- The private Git bridge path is derived from the token,
+                            -- so a reloaded lazygit still cleans up on removal.
+                            tool.programs = { gitDirectory = lazygitLaunch.directory(record.token) }
+                        end
+                        tools[key] = tool
+                        byPane[tool.pane] = tool
+                    end
+                end
+            end
+        end
+    end
+    if next(tools) then scheduleWatcher(cx) end
+end
+
 
 local function create(cx, owner, token, finish, kind, requestedPane, programs)
     local host = cx.hosts:current()
@@ -366,12 +283,25 @@ local function create(cx, owner, token, finish, kind, requestedPane, programs)
         cx:toast("error", "Kiku 助手来源已变化", "请从本机来源窗格重新打开工具。")
         return
     end
-    local launchDirectory, launchError = identity.launch(token, owner.cwd)
-    if not launchDirectory then
-        if programs then lazygitLaunch.cleanup(programs.gitDirectory) end
-        finish()
-        cx:toast("error", "无法准备工具启动", launchError)
-        return
+    local launchSpec
+    if kind == "lazygit" then
+        -- Starting the program through Launch.command means no command is typed
+        -- into a shell, so creation never waits for a prompt. Tern runs the line
+        -- through the login shell in place of an interactive one (agent pane).
+        launchSpec = {
+            cwd = owner.cwd,
+            command = lazygitLaunch.command(
+                programs.gitDirectory, programs.lazygit, programs.pathEnv),
+        }
+    else
+        local launchDirectory, launchError = identity.launch(token, owner.cwd)
+        if not launchDirectory then
+            if programs then lazygitLaunch.cleanup(programs.gitDirectory) end
+            finish()
+            cx:toast("error", "无法准备工具启动", launchError)
+            return
+        end
+        launchSpec = { cwd = launchDirectory }
     end
     local flight = pending[toolKey(owner, kind)]
     if flight then flight.token = token end
@@ -379,13 +309,13 @@ local function create(cx, owner, token, finish, kind, requestedPane, programs)
     local existing = {}
     for _, info in ipairs(cx.session:panes()) do existing[info.pane] = true end
     local ok, result = pcall(function()
-        pane = cx.layout:split(owner.anchor, "right", { cwd = launchDirectory }, { focus = false })
+        pane = cx.layout:split(owner.anchor, "right", launchSpec, { focus = false })
     end)
     if not ok then splitError = tostring(result) end
     if not pane then
         local created = {}
         for _, info in ipairs(cx.session:panes()) do
-            if not existing[info.pane] and info.kind == "terminal" then
+            if not existing[info.pane] and (info.kind == "terminal" or info.kind == "agent") then
                 table.insert(created, info.pane)
             end
         end
@@ -408,10 +338,9 @@ local function create(cx, owner, token, finish, kind, requestedPane, programs)
         cx:toast("error", "无法确认工具布局创建结果", detail)
         return
     end
-    -- Float before the handshake starts the shell, so the tool never waits in
-    -- the split it was created in. Focus stays on the source pane because the
-    -- handshake's request checks compare it with the pane the user asked from;
-    -- presentTool floats the same pane again, focused, once identity is known.
+    -- Float before the shell or command starts so the tool never sits in the
+    -- split it was created in, then present it at once. Ownership is the pane
+    -- ID, so creation has nothing to verify and never waits.
     local floated, floatError = false, nil
     local floatCalled, floatResult, floatReason = pcall(function()
         return cx.layout:float(pane, owner.anchor, "br", { focus = false })
@@ -423,7 +352,7 @@ local function create(cx, owner, token, finish, kind, requestedPane, programs)
     end
     if not floated then
         cx:toast("error", "工具已创建但未能浮动",
-            floatError or "身份确认后将再次尝试浮动。")
+            floatError or "再次打开时会尝试恢复浮动。")
     end
     local key = toolKey(owner, kind)
     local tool = {
@@ -440,7 +369,8 @@ local function create(cx, owner, token, finish, kind, requestedPane, programs)
     if not saved then
         cx:toast("error", "工具身份无法持久化", tostring(saveError))
     end
-    handshake(cx, tool, 200)
+    recordStartupDetails(cx, tool)
+    presentTool(cx, tool)
 end
 
 local function openForOwner(cx, kind, owner, requestedPane)
@@ -455,38 +385,11 @@ local function openForOwner(cx, kind, owner, requestedPane)
     end
     local existing = tools[key]
     if existing and liveTool(cx, existing) then
-        if not existing.identityVerified then
-            cx:toast("error", "工具身份未确认", "保留窗格；不接管或创建重复实例。")
-            return
-        end
-        local reuseFlight = {}
         existing.request = owner
-        pending[key] = reuseFlight
-        local function release()
-            if pending[key] == reuseFlight then pending[key] = nil end
-        end
-        focusTool(cx, existing, release)
+        focusTool(cx, existing)
         return
     end
-    local records = identity.records()
-    for _, record in ipairs(records) do
-        if record.unreadable then
-            cx:toast("error", "工具记录无法读取", "保留现有记录且不创建重复工具。")
-            return
-        end
-        local currentInstance = false
-        for _, managed in pairs(tools) do
-            if managed.token == record.token then currentInstance = true; break end
-        end
-        if not currentInstance and record.host == owner.host
-            and ((record.originTab == owner.tab and record.cwd == owner.cwd and record.kind == kind)
-                or record.source == owner.pane or record.pane == owner.pane)
-            and sourcePane(cx, record.pane) then
-            cx:toast("error", "工具身份未确认",
-                "已有历史工具记录；请交由 Tern 原生查看或关闭，未创建重复工具。")
-            return
-        end
-    end
+    if existing then removeTool(existing, true) end
     if configError then
         cx:toast("error", "Kiku 配置错误", configError)
         return
@@ -519,15 +422,14 @@ local function openForOwner(cx, kind, owner, requestedPane)
                     create(readyCx, owner, token, finish, kind, requestedPane, readyPrograms)
                     return
                 end
-                verifyManaged(readyCx, owner.sourceTool, function(verified, checkedCx)
-                    if not checkedCx or not verified or byPane[owner.pane] ~= owner.sourceTool then
-                        if readyPrograms then lazygitLaunch.cleanup(readyPrograms.gitDirectory) end
-                        finish()
-                        if checkedCx then checkedCx:toast("error", "来源工具身份已变化", "未创建新工具。") end
-                        return
-                    end
-                    create(checkedCx, owner, token, finish, kind, requestedPane, readyPrograms)
-                end)
+                if not managedNow(readyCx, owner.sourceTool)
+                    or byPane[owner.pane] ~= owner.sourceTool then
+                    if readyPrograms then lazygitLaunch.cleanup(readyPrograms.gitDirectory) end
+                    finish()
+                    readyCx:toast("error", "来源工具身份已变化", "未创建新工具。")
+                    return
+                end
+                create(readyCx, owner, token, finish, kind, requestedPane, readyPrograms)
             end
             if programs then
                 lazygitLaunch.prepare(tokenCx, token, programs.git, function(directory, prepError, prepCx)
@@ -642,17 +544,14 @@ local function open(cx, kind)
         end
         openForOwner(nextCx, kind, owner, requestedPane)
     end
+    adoptRecords(cx)
     local sourceTool = byPane[requestedPane]
     owner.sourceTool = sourceTool
-    if not sourceTool then start(cx); return end
-    verifyManaged(cx, sourceTool, function(verified, nextCx)
-        if not nextCx then return end
-        if not verified or byPane[requestedPane] ~= sourceTool then
-            nextCx:toast("error", "当前工具身份未确认", "未恢复、移动或创建任何工具。")
-            return
-        end
-        start(nextCx)
-    end)
+    if sourceTool and not managedNow(cx, sourceTool) then
+        cx:toast("error", "当前工具身份未确认", "未恢复、移动或创建任何工具。")
+        return
+    end
+    start(cx)
 end
 
 -- Tern drops a picture-in-picture tool from focus to glance when the window
@@ -671,7 +570,8 @@ local function leaderTool(cx)
     for paneId, tool in pairs(byPane) do
         if tool.host == host.id and tool.session == session.id then
             local pane = cx.session:pane(paneId)
-            if pane and pane.kind == "terminal" and pane.floating == true
+            if pane and (pane.kind == "terminal" or pane.kind == "agent")
+                and pane.floating == true
                 and pane.tab == tab and pane.parked ~= true and pane.exited == nil then
                 if candidate then ambiguous = true; break end
                 candidate = tool
@@ -682,7 +582,7 @@ local function leaderTool(cx)
 end
 
 local function hide(cx)
-    local focused = cx.session:focused()
+    adoptRecords(cx)
     local tool, ambiguous = leaderTool(cx)
     if not tool then
         if ambiguous then
@@ -692,30 +592,40 @@ local function hide(cx)
         cx:toast("error", "工具身份未确认", "未识别当前窗格；未执行收起操作。")
         return
     end
-    local pane = liveTool(cx, tool)
-    if not pane then return end
-    verifyManaged(cx, tool, function(verified, nextCx)
-        if not nextCx then return end
-        local currentHost = nextCx.hosts:current()
-        if currentHost.kind ~= "local" or currentHost.id ~= tool.host
-            or nextCx.sessions:current().id ~= tool.session
-            or tools[tool.key] ~= tool or byPane[tool.pane] ~= tool
-            or nextCx.session:focused() ~= focused then return end
-        if not verified then
-            nextCx:toast("error", "工具身份未确认", "保留当前窗格；未执行收起操作。")
-            return
-        end
-        local ok, err = nextCx.layout:park(tool.pane)
-        if not ok then nextCx:toast("error", "无法收起工具", err); return end
-        local returnPane = tool.lastSource
-        if returnPane and returnPane ~= tool.pane and sourcePane(nextCx, returnPane) then
-            nextCx.layout:focus(returnPane)
-        end
-    end)
+    if not managedNow(cx, tool) then
+        cx:toast("error", "工具身份未确认", "保留当前窗格；未执行收起操作。")
+        return
+    end
+    local ok, err = cx.layout:park(tool.pane)
+    if not ok then cx:toast("error", "无法收起工具", err); return end
+    local returnPane = tool.lastSource
+    if returnPane and returnPane ~= tool.pane and sourcePane(cx, returnPane) then
+        cx.layout:focus(returnPane)
+    end
+end
+
+-- The confirmation describes the pane as it is now, not the program the tool
+-- was created for: ownership comes from the pane ID alone.
+local function describePane(pane)
+    local parts = {}
+    if type(pane.title) == "string" and pane.title ~= "" then
+        table.insert(parts, "标题 " .. pane.title)
+    end
+    if type(pane.cwd) == "string" and pane.cwd ~= "" then
+        table.insert(parts, "目录 " .. pane.cwd)
+    end
+    if type(pane.running) == "table" and type(pane.running.line) == "string" then
+        table.insert(parts, "前台命令 " .. pane.running.line)
+    elseif pane.busy == true then
+        table.insert(parts, "正在运行前台命令")
+    else
+        table.insert(parts, "无前台命令")
+    end
+    return table.concat(parts, " · ")
 end
 
 local function endTool(cx)
-    local focused = cx.session:focused()
+    adoptRecords(cx)
     local tool, ambiguous = leaderTool(cx)
     if not tool then
         if ambiguous then
@@ -725,51 +635,29 @@ local function endTool(cx)
         cx:toast("error", "工具身份未确认", "未识别当前窗格；未执行结束操作。")
         return
     end
-    local name = tool.kind == "lazygit" and "lazygit" or "临时终端"
-    verifyManaged(cx, tool, function(verified, checkedCx)
-        if not checkedCx then return end
-        if checkedCx.session:focused() ~= focused
-            or tools[tool.key] ~= tool or byPane[tool.pane] ~= tool then return end
-        if not verified then
-            checkedCx:toast("error", "工具身份未确认", "保留当前窗格；未显示结束确认，也未执行结束操作。")
+    if not managedNow(cx, tool) then
+        cx:toast("error", "工具身份未确认", "保留当前窗格；未显示结束确认，也未执行结束操作。")
+        return
+    end
+    local detail = describePane(liveTool(cx, tool))
+    cx:pick({ placeholder = "确认结束工具？未知或运行中的任务可能一并结束。", items = {
+        { label = "取消", id = "cancel", current = true, detail = detail },
+        { label = "结束此窗格", id = "end", detail = detail },
+    } }):next(function(item, err, nextCx)
+        if not nextCx or err or not item or item.id ~= "end" then return end
+        if tools[tool.key] ~= tool or byPane[tool.pane] ~= tool then return end
+        if not nextCx.session:pane(tool.pane) then removeTool(tool, true); return end
+        local closed, closeError = pcall(function() nextCx.layout:close(tool.pane) end)
+        if not closed then
+            nextCx:toast("error", "无法结束工具", tostring(closeError))
             return
         end
-        local items = {
-            { label = "取消", id = "cancel", current = true },
-            { label = "结束此" .. name, id = "end" },
-        }
-        checkedCx:pick({ placeholder = "确认结束" .. name .. "？未知或运行中的任务可能一并结束。", items = items }):next(
-            function(item, err, nextCx)
-                if not nextCx or err or not item or item.id ~= "end"
-                    or nextCx.session:focused() ~= focused then return end
-                verifyManaged(nextCx, tool, function(stillVerified, finalCx)
-                    if not finalCx then return end
-                    local host = finalCx.hosts:current()
-                    local current = finalCx.session:pane(tool.pane)
-                    if tools[tool.key] ~= tool or byPane[tool.pane] ~= tool
-                        or not current or current.kind ~= "terminal"
-                        or host.kind ~= "local" or host.id ~= tool.host
-                        or finalCx.sessions:current().id ~= tool.session
-                        or finalCx.session:focused() ~= focused then
-                        finalCx:toast("error", "工具身份已变化", "保留当前窗格；未执行结束操作。")
-                        return
-                    end
-                    if not stillVerified then
-                        finalCx:toast("error", "工具身份未确认", "保留当前窗格；未执行结束操作。")
-                        return
-                    end
-                    local closed, closeError = pcall(function() finalCx.layout:close(tool.pane) end)
-                    if not closed then
-                        finalCx:toast("error", "无法结束" .. name, tostring(closeError))
-                        return
-                    end
-                    if not finalCx.session:pane(tool.pane) then removeTool(tool, true) end
-                end)
-            end)
+        if not nextCx.session:pane(tool.pane) then removeTool(tool, true) end
     end)
 end
 
 local function restore(cx)
+    adoptRecords(cx)
     local request, requestError = ownerFor(cx)
     if not request or request.hostKind ~= "local" then
         cx:toast("error", "无法恢复工具", requestError or "当前来源不是本机窗格。")
@@ -779,7 +667,7 @@ local function restore(cx)
     for _, tool in pairs(tools) do
         local pane = liveTool(cx, tool)
         if tool.host == request.host and tool.session == request.session
-            and tool.identityVerified and pane and pane.exited == nil and pane.parked == true then
+            and pane and pane.exited == nil and pane.parked == true then
             local kind = tool.kind == "lazygit" and "lazygit" or "终端"
             table.insert(items, { label = "本机 · " .. kind .. " · " .. tool.cwd, tool = tool })
         end
@@ -803,48 +691,26 @@ local function restore(cx)
                 { label = "取消", id = "cancel", current = true },
             } }):next(function(choice, choiceError, choiceCx)
                 if not choiceCx or choiceError or not choice or choice.id ~= "existing"
-                    or not requestValid(choiceCx, request) or tools[key] ~= conflict or pending[key] then return end
-                local flight = {}
-                pending[key] = flight
+                    or not requestValid(choiceCx, request) or tools[key] ~= conflict then return end
                 conflict.request = request
-                focusTool(choiceCx, conflict, function()
-                    if pending[key] == flight then pending[key] = nil end
-                end)
+                focusTool(choiceCx, conflict)
             end)
             return
         end
         local oldKey = tool.key
-        if pending[key] or pending[oldKey] then
-            pickedCx:toast("error", "工具正在恢复", "未改变任何窗格。")
-            return
+        if not managedNow(pickedCx, tool) or not requestValid(pickedCx, request) then return end
+        local current = liveTool(pickedCx, tool)
+        if not current or current.exited ~= nil or current.parked ~= true
+            or (tools[key] and tools[key] ~= tool)
+            or not tiledTarget(pickedCx, destination, tool.pane, request.pane) then return end
+        if key ~= oldKey then
+            tools[oldKey] = nil
+            tool.key, tool.originTab = key, destination
+            tools[key] = tool
         end
-        local flight = {}
-        pending[key], pending[oldKey] = flight, flight
-        local function release()
-            if pending[key] == flight then pending[key] = nil end
-            if pending[oldKey] == flight then pending[oldKey] = nil end
-        end
-        verifyManaged(pickedCx, tool, function(verified, checkedCx)
-            if not checkedCx then release(); return end
-            local current = liveTool(checkedCx, tool)
-            if not verified or not requestValid(checkedCx, request)
-                or tools[oldKey] ~= tool or byPane[tool.pane] ~= tool
-                or not current or current.exited ~= nil or current.parked ~= true
-                or (tools[key] and tools[key] ~= tool)
-                or not tiledTarget(checkedCx, destination, tool.pane, request.pane) then
-                release()
-                return
-            end
-            if key ~= oldKey then
-                tools[oldKey] = nil
-                tool.key, tool.originTab = key, destination
-                tools[key] = tool
-            end
-            tool.request = request
-            displayTool(checkedCx, tool, request)
-            persist(tool)
-            release()
-        end)
+        tool.request = request
+        displayTool(pickedCx, tool, request)
+        persist(tool)
     end)
 end
 

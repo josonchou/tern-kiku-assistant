@@ -6,8 +6,12 @@ local function quote(value)
     return "'" .. value:gsub("'", "'\\''") .. "'"
 end
 
+function M.directory(token)
+    return "/tmp/tern-kiku-git-" .. token
+end
+
 function M.prepare(cx, token, gitPath, callback)
-    local directory = "/tmp/tern-kiku-git-" .. token
+    local directory = M.directory(token)
     tern.process.run({ "/bin/mkdir", "-m", "700", "--", directory },
         { timeout_ms = 3000 }, function(mkdirResult, mkdirCx)
             if not mkdirCx then return end

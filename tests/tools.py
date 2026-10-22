@@ -299,17 +299,17 @@ def run(h):
                        and pane.get("exited") == 7),
         "parked tool records its real failed shell exit",
     )
-    # A failed shell generation is no longer owned; plugin controls must not
-    # reuse its prior identity. Close it through Tern and start a fresh tool.
+    # Ownership is the pane id, so a failed or restarted shell in the same pane
+    # is still this tool: ending it asks first and shows the live pane state.
     h.lua(f"cx.layout:focus({failed_tool_id}); return true")
     h.ctl("key ctrl+b")
     h.ctl("key shift+q")
-    h.wait_for(lambda _state: _has_error_alert(h.ctl("tree")),
-               "plugin refuses to end an unconfirmed failed shell")
-    assert h.lua_json(f"cx.session:pane({failed_tool_id})")
-    h.lua(f"cx.layout:close({failed_tool_id}); return true")
+    h.wait_for(lambda state: bool(state.get("picker")),
+               "failed shell still offers the live end confirmation")
+    h.ctl("picker down 1")
+    h.ctl("key enter")
     h.wait_for(lambda _: h.lua_json(f"cx.session:pane({failed_tool_id})") is None,
-               "Tern natively closes the failed unconfirmed tool")
+               "confirmed end closes the failed tool pane")
     h.lua(f"cx.layout:focus({source_id}); return true")
     h.ctl("key ctrl+b")
     h.ctl("key t")
@@ -502,32 +502,31 @@ def run(h):
     h.ctl("plugins fixtures")
     panes_after_reload = {pane["pane"] for pane in h.lua_json("cx.session:panes()")}
     assert stale_tool_id in panes_after_reload
+    # Ownership comes from the persisted pane id, so the reloaded plugin adopts
+    # the parked tool instead of refusing it.
     h.lua(f"cx.layout:focus({stale_source['pane']}); return true")
     h.ctl("key ctrl+b")
     h.ctl("key t")
     h.wait_for(
-        lambda _state: _has_error_alert(h.ctl("tree")),
-        "same-key parked legacy pane blocks duplicate startup",
-    )
-    assert stale_pid_alive(), "Parked legacy refusal ended its task"
-    assert {pane["pane"] for pane in h.lua_json("cx.session:panes()")} == panes_after_reload
-    assert h.lua_json(f"cx.session:pane({stale_tool_id})").get("parked") is True
-    h.wait_for(lambda _state: not _has_error_alert(h.ctl("tree")),
-               "parked legacy refusal clears before native terminal close")
-    h.lua(f"cx.layout:unpark({stale_tool_id}, {{ focus = true }}); return true")
-    h.ctl("key ctrl+c")
-    h.wait_for(
         lambda _: bool((pane := h.lua_json(f"cx.session:pane({stale_tool_id})"))
-                       and pane.get("at_prompt") is True),
-        "native Ctrl+C stops the legacy process and returns its shell prompt",
+                       and pane.get("parked") is not True and pane.get("floating") is True
+                       and pane.get("focused") is True),
+        "reloaded plugin restores the parked tool by its pane id",
     )
-    assert not stale_pid_alive(), "Native Ctrl+C left the legacy process alive"
-    h.type_text("exit 0")
+    assert not _has_error_alert(h.ctl("tree")), "adoption must not report an identity refusal"
+    assert stale_pid_alive(), "Adopting the parked tool ended its task"
+    assert {pane["pane"] for pane in h.lua_json("cx.session:panes()")} == panes_after_reload
+    h.ctl("key ctrl+b")
+    h.ctl("key shift+q")
+    h.wait_for(lambda state: bool(state.get("picker")),
+               "adopted tool still asks before ending")
+    h.ctl("picker down 1")
     h.ctl("key enter")
     h.wait_for(
         lambda _: h.lua_json(f"cx.session:pane({stale_tool_id})") is None,
-        "native shell exit removes the legacy pane while retaining its old record",
+        "confirmed end closes the adopted tool pane",
     )
+    h.wait_for(lambda _: not stale_pid_alive(), "Confirmed end stops the adopted tool task")
     h.lua(f"cx.layout:focus({stale_source['pane']}); return true")
     new_after_stale = {pane["pane"] for pane in h.lua_json("cx.session:panes()")}
     h.ctl("key ctrl+b")
@@ -541,7 +540,7 @@ def run(h):
         assert len(new) == 1, new
         replacement_tool.update(new[0])
         return bool(new[0].get("floating") is True and new[0].get("focused") is True)
-    h.wait_for(replacement_opened, "closed-pane history no longer blocks a new source tool")
+    h.wait_for(replacement_opened, "closed tool leaves no record that blocks a new source tool")
     replacement_id = replacement_tool["pane"]
     assert replacement_id != stale_tool_id
     h.wait_for(
@@ -552,9 +551,9 @@ def run(h):
     h.ctl("key enter")
     h.wait_for(
         lambda _: h.lua_json(f"cx.session:pane({replacement_id})") is None,
-        "replacement terminal closes without touching the old history record",
+        "replacement terminal closes without touching the old record",
     )
-    h.record("present parked legacy pane refuses ownership, closed legacy pane no longer blocks explicit startup")
+    h.record("reload adopts a parked tool by pane id; ending removes it and leaves no blocker")
 
 
     unknown_source_directory = h.root / "unknown reload source"
@@ -573,11 +572,11 @@ def run(h):
         assert len(new) == 1, new
         unknown_tool.update(new[0])
         return bool(new[0].get("floating") is True and new[0].get("focused") is True)
-    h.wait_for(unknown_tool_opened, "independent source opens a tool for reload rejection")
+    h.wait_for(unknown_tool_opened, "independent source opens a tool for reload adoption")
     unknown_tool_id = unknown_tool["pane"]
     h.wait_for(
         lambda _: h.lua_json(f"cx.session:pane({unknown_tool_id})").get("at_prompt") is True,
-        "reload rejection tool reaches its shell prompt",
+        "reload adoption tool reaches its shell prompt",
     )
     unknown_pid_file = h.root / "unknown reload shell pid.txt"
     h.type_text("printf '%s\\n' \"$$\" > " + shlex.quote(str(unknown_pid_file)))
@@ -639,7 +638,7 @@ def run(h):
     h.ctl("plugins run plugin.kiku.restore_tools")
     h.wait_for(
         lambda state: not state.get("picker") and _has_info_toast(h.ctl("tree")),
-        "post-reload restore visibly reports no current-VM tools",
+        "post-reload restore reports no parked tools",
     )
     assert not h.state().get("picker"), \
         "Plain prefix text in an ordinary pane was accepted as tool identity"
@@ -654,56 +653,82 @@ def run(h):
         for key in ("pane", "tab", "floating", "parked")
     ), (marker_tool_before, marker_tool_after)
     assert {pane["pane"] for pane in h.lua_json("cx.session:panes()")} == marker_panes_before
-    assert unknown_pid_alive(), "Marker-only discovery ended the recorded tool shell"
-    h.record("plain prefix text in another native pane cannot claim or park the live recorded tool")
+    assert unknown_pid_alive(), "A plain-text probe ended the recorded tool shell"
+    h.record("plain prefix text in another native pane cannot claim the recorded tool")
     h.wait_for(lambda _state: not _has_error_alert(h.ctl("tree")),
-               "marker-only rejection alert clears before unknown-tool controls")
+               "post-reload info toast clears before adoption controls")
+    # The persisted record names the pane, so the reloaded plugin manages it.
     h.lua(f"cx.layout:focus({unknown_tool_id}); return true")
     h.ctl("key ctrl+b")
-    h.ctl("key t")
-    h.wait_for(lambda _state: _has_error_alert(h.ctl("tree")),
-               "open from an unknown post-reload tool pane visibly refuses nesting")
-    assert unknown_pid_alive(), "Rejected open ended the unknown tool shell"
-    assert {pane["pane"] for pane in h.lua_json("cx.session:panes()")} == marker_panes_before
-    h.wait_for(lambda _state: not _has_error_alert(h.ctl("tree")),
-               "open refusal alert clears before hide check")
-    h.ctl("key ctrl+b")
     h.ctl("key q")
-    h.wait_for(lambda _state: _has_error_alert(h.ctl("tree")),
-               "hide from an unknown post-reload pane visibly refuses")
-    assert unknown_pid_alive(), "Rejected hide ended the unknown tool shell"
-    h.wait_for(lambda _state: not _has_error_alert(h.ctl("tree")),
-               "hide refusal alert clears before end check")
+    h.wait_for(
+        lambda _: h.lua_json(f"cx.session:pane({unknown_tool_id})").get("parked") is True,
+        "adopted tool parks through the reloaded plugin",
+    )
+    assert unknown_pid_alive(), "Adopted park ended the tool shell"
+    h.lua(f"cx.layout:focus({unknown_source['pane']}); return true")
+    h.ctl("key ctrl+b")
+    h.ctl("key t")
+    h.wait_for(
+        lambda _: bool((pane := h.lua_json(f"cx.session:pane({unknown_tool_id})"))
+                       and pane.get("parked") is not True and pane.get("floating") is True
+                       and pane.get("focused") is True),
+        "opening from the source restores the adopted parked tool",
+    )
+    assert unknown_pid_alive(), "Restoring the adopted tool ended its shell"
+    assert {pane["pane"] for pane in h.lua_json("cx.session:panes()")} == marker_panes_before
     h.ctl("key ctrl+b")
     h.ctl("key shift+q")
-    h.wait_for(lambda _state: _has_error_alert(h.ctl("tree")),
-               "end from an unknown post-reload pane visibly refuses")
-    assert unknown_pid_alive(), "Rejected end ended the unknown tool shell"
-    assert {pane["pane"] for pane in h.lua_json("cx.session:panes()")} == marker_panes_before
+    h.wait_for(lambda state: bool(state.get("picker")),
+               "adopted tool asks before ending")
+    h.ctl("picker down 1")
+    h.ctl("key enter")
+    h.wait_for(
+        lambda _: h.lua_json(f"cx.session:pane({unknown_tool_id})") is None,
+        "confirmed end closes the adopted tool pane",
+    )
+    h.wait_for(lambda _: not unknown_pid_alive(), "Confirmed end stops the adopted tool shell")
+    h.record("post-reload panes are managed by their recorded pane id")
+    # Session stays part of the record: the same pane moved elsewhere is not a
+    # tool of this session and is left untouched.
+    h.lua(f"cx.layout:focus({unknown_source['pane']}); return true")
+    session_before = {pane["pane"] for pane in h.lua_json("cx.session:panes()")}
+    h.ctl("key ctrl+b")
+    h.ctl("key t")
+    session_tool = {}
+    def session_tool_opened(_state):
+        new = [pane for pane in h.lua_json("cx.session:panes()")
+               if pane["pane"] not in session_before]
+        if not new:
+            return False
+        assert len(new) == 1, new
+        session_tool.update(new[0])
+        return bool(new[0].get("floating") is True and new[0].get("focused") is True)
+    h.wait_for(session_tool_opened, "session-scope scenario opens its tool")
+    session_tool_id = session_tool["pane"]
     moved_session = h.lua_json(
-        'cx.sessions:create({name="moved unknown tool",cwd='
+        'cx.sessions:create({name="moved tool",cwd='
         f'cx.session:pane({unknown_source["pane"]}).cwd' + '})'
     )
     h.lua(
-        f"local tab, err = cx.layout:move_to_new_tab({unknown_tool_id}, "
+        f"local tab, err = cx.layout:move_to_new_tab({session_tool_id}, "
         f"{moved_session['id']}, {{focus=true}}); assert(tab, err); return tab"
     )
-    moved_tool_before = h.lua_json(f"cx.session:pane({unknown_tool_id})")
+    moved_tool_before = h.lua_json(f"cx.session:pane({session_tool_id})")
     moved_panes_before = {pane["pane"] for pane in h.lua_json("cx.session:panes()")}
     h.ctl("key ctrl+b")
-    h.ctl("key t")
+    h.ctl("key q")
     h.wait_for(lambda _state: _has_error_alert(h.ctl("tree")),
-               "moving an unknown tool to another session does not authorize nesting")
-    assert unknown_pid_alive(), "Cross-session refusal ended the unknown tool shell"
+               "a tool moved to another session is not managed there")
     assert {pane["pane"] for pane in h.lua_json("cx.session:panes()")} == moved_panes_before
-    moved_tool_after = h.lua_json(f"cx.session:pane({unknown_tool_id})")
+    moved_tool_after = h.lua_json(f"cx.session:pane({session_tool_id})")
     assert all(moved_tool_after.get(key) == moved_tool_before.get(key)
                for key in ("pane", "tab", "cwd", "floating", "parked"))
-    h.record("native cross-session movement does not turn an unknown legacy tool into a new source")
-    h.lua(f"cx.layout:close({unknown_tool_id}); return true")
+    h.record("cross-session movement keeps the recorded session binding")
+    h.lua(f"cx.layout:close({session_tool_id}); return true")
     assert h.lua_json(f"cx.session:pane({unknown_source['pane']})"), \
-        "Unknown-tool cleanup closed its independent source pane"
-    h.record("post-reload markerless tool pane is rejected as an owner without nesting or termination")
+        "Session-scope cleanup closed its independent source pane"
+    h.record("pane lifecycle outside the recorded session is not managed")
     orphan_directory = h.root / "orphan scratch origin"
     orphan_directory.mkdir()
     h.open_repo(orphan_directory)
@@ -789,7 +814,7 @@ def run(h):
 
 def run_restart(h):
     # Tern 0.9.5 currently reproduces native Restart in serve, not daemon mode.
-    # Keep its process-generation regression separate from the full GUI suite.
+    # Keep its pane-lifecycle regression separate from the full GUI suite.
     source_directory = h.root / "native restart source"
     source_directory.mkdir()
     h.open_repo(source_directory)
@@ -847,70 +872,47 @@ def run_restart(h):
         lambda _state: not _has_error_alert(h.ctl("tree")),
         "previous terminal warning disappears before Restart checks",
     )
+    # The pane id is the whole identity: the restarted shell is still the tool.
+    h.lua(f"cx.layout:focus({failed_tool_id}); return true")
     h.ctl("key ctrl+b")
     h.ctl("key t")
     h.wait_for(
-        lambda _state: _has_error_alert(h.ctl("tree")),
-        "open attempt after Restart reports its visible refusal",
+        lambda _: bool((pane := h.lua_json(f"cx.session:pane({failed_tool_id})"))
+                       and pane.get("focused") is True),
+        "open after Restart reuses the same tool pane",
     )
     assert restarted_alive(), "Open after native Restart ended the new shell"
-    assert h.lua_json(f"cx.session:pane({failed_tool_id})"), \
-        "Open after native Restart closed the new shell pane"
     assert {pane["pane"] for pane in h.lua_json("cx.session:panes()")} == \
         restart_before | {failed_tool_id}, "Open after Restart created a duplicate tool pane"
-    h.wait_for(
-        lambda _state: not _has_error_alert(h.ctl("tree")),
-        "open refusal alert clears before hide check",
-    )
-    h.lua(f"cx.layout:focus({failed_tool_id}); return true")
     h.ctl("key ctrl+b")
     h.ctl("key q")
     h.wait_for(
-        lambda _state: _has_error_alert(h.ctl("tree")),
-        "hide attempt after Restart reports its visible refusal",
+        lambda _: h.lua_json(f"cx.session:pane({failed_tool_id})").get("parked") is True,
+        "hide after Restart parks the restarted pane",
     )
     assert restarted_alive(), "Hide after native Restart ended the new shell"
-    assert h.lua_json(f"cx.session:pane({failed_tool_id})"), \
-        "Hide after native Restart closed the new shell pane"
-    h.wait_for(
-        lambda _state: not _has_error_alert(h.ctl("tree")),
-        "hide refusal alert clears before end confirmation",
-    )
-    h.lua(f"cx.layout:focus({failed_tool_id}); return true")
-    h.ctl("key ctrl+b")
-    h.ctl("key shift+q")
-    h.wait_for(
-        lambda _state: _has_error_alert(h.ctl("tree")),
-        "unconfirmed restarted shell is rejected before end confirmation",
-    )
-    assert restarted_alive(), "End after native Restart killed the new shell generation"
-    assert h.lua_json(f"cx.session:pane({failed_tool_id})"), \
-        "End after native Restart closed the new shell pane"
-    h.wait_for(
-        lambda _state: not _has_error_alert(h.ctl("tree")),
-        "end refusal alert clears before restarting shell",
-    )
-    h.type_text("exit 7")
+    assert not _has_error_alert(h.ctl("tree")), "Adopted management must not report a refusal"
+    h.ctl("plugins run plugin.kiku.restore_tools")
+    h.wait_for(lambda state: bool(state.get("picker")), "restore lists the parked restarted tool")
     h.ctl("key enter")
     h.wait_for(
         lambda _: bool((pane := h.lua_json(f"cx.session:pane({failed_tool_id})"))
-                       and pane.get("exited") == 7),
-        "restarted shell can independently exit with failure",
+                       and pane.get("parked") is not True and pane.get("focused") is True),
+        "restore resumes the same restarted pane",
     )
-    h.lua(f"cx.layout:focus({failed_tool_id}); return true")
+    assert restarted_alive(), "Restore after native Restart ended the new shell"
     h.ctl("key ctrl+b")
     h.ctl("key shift+q")
+    h.wait_for(lambda state: bool(state.get("picker")),
+               "restarted shell asks before ending")
+    h.ctl("picker down 1")
+    h.ctl("key enter")
     h.wait_for(
-        lambda _state: _has_error_alert(h.ctl("tree")),
-        "failed restarted shell is rejected before end confirmation",
+        lambda _: h.lua_json(f"cx.session:pane({failed_tool_id})") is None,
+        "confirmed end closes the restarted shell pane",
     )
-    assert h.lua_json(f"cx.session:pane({failed_tool_id})"), \
-        "old tool identity closed the restarted shell after its failure"
-    h.wait_for(
-        lambda _state: not _has_error_alert(h.ctl("tree")),
-        "restarted-failure refusal alert clears before source reuse",
-    )
-    h.record("native Restart never authorizes the prior tool identity to open, hide or end the new shell")
+    h.wait_for(lambda _: not restarted_alive(), "Confirmed end stops the restarted shell")
+    h.record("native Restart keeps the same tool pane reusable, parkable, restorable and endable")
 
 
 def run_remote_guard(h):

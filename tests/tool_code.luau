@@ -26,7 +26,6 @@ return function(tools, tern, state, cx, fresh, selectedCase)
         state.samples=0
         state.processByPid={}
         state.processCallbacks={}
-        state.promiseCallbacks={}
         state.pickChoices={}
         state.pickHandler=nil
         state.identityFiles={}
@@ -37,13 +36,11 @@ return function(tools, tern, state, cx, fresh, selectedCase)
         state.loginProbes=0
         state.shellProgram="/bin/zsh"
         state.timers={}
-        state.parentCallbacks={}
-        state.deferParentFind=false
+        state.splitLaunches={}
         state.commands={}
         state.events={}
         state.toasts={}
         state.deferProcess=false
-        state.deferPromises=false
         state.processInvalid=false
         state.splitMode=nil
         state.isGitRepo=true
@@ -317,7 +314,7 @@ return function(tools, tern, state, cx, fresh, selectedCase)
         eq(cx.session:pane(scratch.pane).exited,nil)
         eq(#toolPanes(),1)
 
-    elseif selectedCase=="reload_record_is_not_reclaimed" then
+    elseif selectedCase=="reload_adopts_record_with_live_pane" then
         setup()
         local original=openScratch()[1]
         local freshTools=fresh("tools")
@@ -326,39 +323,48 @@ return function(tools, tern, state, cx, fresh, selectedCase)
         state.commands.open_terminal.run(cx)
         eq(#toolPanes(),1)
         eq(toolPanes()[1].pane,original.pane)
-
-    elseif selectedCase=="unknown_process_is_not_managed" then
-        setup()
-        state.processInvalid=true
-        state.commands.open_terminal.run(cx)
-        local first=toolPanes()
-        eq(#first,1)
-        state.processInvalid=false
+        eq(cx.session:focused(),original.pane)
+        state.commands.hide_tool.run(cx)
+        eq(cx.session:pane(original.pane).parked,true)
+        eq(#state.toasts,0)
+        -- A record whose pane is gone authorizes nothing and blocks nothing.
+        cx.layout:close(original.pane)
         state.focus=1
+        state.commands.hide_tool.run(cx)
+        eq(state.toasts[#state.toasts].title,"工具身份未确认")
+        eq(cx.session:pane(original.pane),nil)
         state.commands.open_terminal.run(cx)
         eq(#toolPanes(),1)
+        eq(toolPanes()[1].pane~=original.pane,true)
 
-    elseif selectedCase=="stale_process_sample_never_awaits_shell" then
+    elseif selectedCase=="process_state_does_not_gate_management" then
+        setup()
+        -- No process inventory at all: ownership still comes from the pane id.
+        state.processInvalid=true
+        local scratch=openScratch()[1]
+        eq(#toolPanes(),1)
+        eq(cx.session:focused(),scratch.pane)
+        state.commands.hide_tool.run(cx)
+        eq(cx.session:pane(scratch.pane).parked,true)
+        eq(#state.toasts,0)
+        state.pickHandler=chooseFirst
+        state.commands.restore_tools.run(cx)
+        eq(cx.session:pane(scratch.pane).parked,false)
+        eq(cx.session:focused(),scratch.pane)
+        state.processInvalid=false
+
+    elseif selectedCase=="frozen_process_sample_never_blocks_actions" then
         setup()
         local scratch=openScratch()[1]
-        eq(cx.session:focused(),scratch.pane)
-        eq(state.settleMaxMs <= 10,true)
-        -- The process sampler stops producing newer samples, the state a busy
-        -- full-screen tool can create. Identity must not be assumed from the
-        -- old sample, and no single wait may approach the 50 ms window budget.
-        state.frozenSample=state.samples
-        state.settleMaxMs=0
+        eq(state.settleCalls,0)
+        -- A frozen sampler is the state a busy full-screen tool can create. No
+        -- action may consult it or wait for it.
+        state.frozenSample=state.samples+1
         state.commands.hide_tool.run(cx)
-        eq(state.settleCalls>0,true)
-        eq(state.settleMaxMs<=10,true)
-        eq(cx.session:pane(scratch.pane).parked,false)
-        eq(#state.toasts,1)
-        eq(state.toasts[1].title,"工具身份未确认")
-        eq(state.toasts[1].detail,"保留当前窗格；未执行收起操作。")
-        state.frozenSample=nil
-        state.commands.hide_tool.run(cx)
-        eq(state.settleMaxMs<=10,true)
         eq(cx.session:pane(scratch.pane).parked,true)
+        eq(#state.toasts,0)
+        eq(state.samples,0)
+        state.frozenSample=nil
 
     elseif selectedCase=="ambiguous_split_blocks_retry" then
         setup()
@@ -376,64 +382,92 @@ return function(tools, tern, state, cx, fresh, selectedCase)
         eq(toolPanes()[1].pane~=uncertain,true)
         eq(cx.session:focused(),toolPanes()[1].pane)
 
-    elseif selectedCase=="stale_cwd_aborts_reuse" then
+    elseif selectedCase=="reuse_restores_layout_without_process_sampling" then
         setup()
         local original=openScratch()[1]
-        state.panes[original.pane].floating=false
+        cx.layout:dock(original.pane,2,"down")
+        cx.layout:float(original.pane,1,"tl")
         state.focus=1
-        state.deferPromises=true
         state.commands.open_terminal.run(cx)
-        state.panes[1].cwd="/work/changed-while-verifying"
-        state.deferPromises=false
-        state.flushPromises()
-        eq(cx.session:focused(),1)
-        eq(cx.session:pane(original.pane).floating,false)
         eq(#toolPanes(),1)
+        eq(cx.session:pane(original.pane).floating,true)
+        eq(cx.session:focused(),original.pane)
+        local corner
+        for _,entry in ipairs(cx.session:layout(11).floats) do
+            if entry.pane==original.pane then corner=entry.corner end
+        end
+        eq(corner,"br")
+        eq(state.samples,0)
+        eq(state.settleCalls,0)
 
-    elseif selectedCase=="restarted_tool_cannot_launch_from_new_cwd" then
+    elseif selectedCase=="restarted_shell_pane_remains_manageable" then
         setup()
         local original=openScratch()[1]
         local pane=cx.session:pane(original.pane)
+        -- Native Restart keeps the pane id but starts a new shell generation.
         state.processByPid[pane.shellPid].started+=1
         pane.cwd="/work/restarted-shell"
-        state.focus=original.pane
+        state.focus=1
         state.commands.open_terminal.run(cx)
-        state.commands.hide_tool.run(cx)
-        state.commands.end_tool.run(cx)
         eq(#toolPanes(),1)
         eq(cx.session:focused(),original.pane)
-        eq(cx.session:pane(original.pane).parked==true,false)
-        eq(cx.session:pane(original.pane).cwd,"/work/restarted-shell")
-
-    elseif selectedCase=="restart_during_final_parent_check_preserves_pane" then
-        setup()
-        local original=openScratch()[1]
-        local pane=cx.session:pane(original.pane)
+        eq(state.toasts[#state.toasts]~=nil,false)
+        state.commands.hide_tool.run(cx)
+        eq(cx.session:pane(original.pane).parked,true)
+        state.pickHandler=chooseFirst
+        state.commands.restore_tools.run(cx)
+        eq(cx.session:pane(original.pane).parked,false)
+        eq(cx.session:focused(),original.pane)
         state.pickHandler=function(options)
-            state.deferParentFind=true
             for _,item in ipairs(options.items) do if item.id=="end" then return item end end
             return nil
         end
         state.commands.end_tool.run(cx)
-        state.processByPid[pane.shellPid].started+=1
-        state.deferParentFind=false
-        state.flushParentFind()
-        eq(cx.session:pane(original.pane)~=nil,true)
-        eq(cx.session:focused(),original.pane)
+        eq(cx.session:pane(original.pane),nil)
 
-    elseif selectedCase=="restart_during_token_preparation_aborts_creation" then
+    elseif selectedCase=="end_confirmation_reports_live_pane" then
+        setup()
+        local original=openScratch()[1]
+        local pane=cx.session:pane(original.pane)
+        pane.title="kiku tool title"
+        pane.busy=true
+        pane.running={line="nvim notes.md",ms=12}
+        local captured
+        state.pickHandler=function(options) captured=options; return nil end
+        state.commands.end_tool.run(cx)
+        eq(captured~=nil,true)
+        eq(captured.placeholder,"确认结束工具？未知或运行中的任务可能一并结束。")
+        local ended
+        for _,item in ipairs(captured.items) do if item.id=="end" then ended=item end end
+        eq(ended~=nil,true)
+        eq(ended.label,"结束此窗格")
+        eq(ended.detail:find("标题 kiku tool title",1,true)~=nil,true)
+        eq(ended.detail:find("目录 /work/project",1,true)~=nil,true)
+        eq(ended.detail:find("前台命令 nvim notes.md",1,true)~=nil,true)
+        eq(cx.session:pane(original.pane)~=nil,true)
+        pane.busy=false
+        pane.running=nil
+        captured=nil
+        state.commands.end_tool.run(cx)
+        local idle
+        for _,item in ipairs(captured.items) do if item.id=="end" then idle=item end end
+        eq(idle.detail:find("无前台命令",1,true)~=nil,true)
+        eq(cx.session:pane(original.pane)~=nil,true)
+
+    elseif selectedCase=="restart_during_token_preparation_still_creates" then
         setup()
         local original=openScratch()[1]
         local pane=cx.session:pane(original.pane)
         pane.cwd="/work/new-context"
+        state.focus=original.pane
         state.deferProcess=true
         state.commands.open_terminal.run(cx)
         state.processByPid[pane.shellPid].started+=1
         state.deferProcess=false
         state.flushProcess()
-        eq(#toolPanes(),1)
-        eq(cx.session:focused(),original.pane)
-        eq(cx.session:pane(original.pane).cwd,"/work/new-context")
+        eq(#toolPanes(),2)
+        eq(toolPanes()[2].cwd,"/work/new-context")
+        eq(cx.session:focused(),toolPanes()[2].pane)
 
     elseif selectedCase=="definite_split_failure_releases_reservation" then
         setup()
@@ -490,29 +524,22 @@ return function(tools, tern, state, cx, fresh, selectedCase)
         eq(root[2].pane,2)
         eq(#toolPanes(),2)
 
-    elseif selectedCase=="source_restart_during_target_reuse_keeps_layout" then
+    elseif selectedCase=="source_restart_does_not_block_target_reuse" then
         setup()
         local scratch=openScratch()[1].pane
         state.focus=1
         state.commands.open_lazygit.run(cx)
         local lazygit=toolPanes()[2].pane
-        state.tick()
         cx.layout:float(lazygit,2,"tl")
         state.focus=scratch
-        state.deferParentFind=true
-        state.commands.open_lazygit.run(cx)
-        state.deferPromises=true
-        state.deferParentFind=false
-        state.flushParentFind()
         state.processByPid[cx.session:pane(scratch).shellPid].started+=1
-        state.deferPromises=false
-        state.flushPromises()
-        eq(cx.session:focused(),scratch)
-        eq(cx.session:pane(lazygit).floating,true)
-        local floats=cx.session:layout(11).floats
+        state.commands.open_lazygit.run(cx)
         local corner
-        for _,float in ipairs(floats) do if float.pane==lazygit then corner=float.corner end end
-        eq(corner,"tl")
+        for _,float in ipairs(cx.session:layout(11).floats) do
+            if float.pane==lazygit then corner=float.corner end
+        end
+        eq(corner,"br")
+        eq(cx.session:focused(),lazygit)
         eq(#toolPanes(),2)
 
     elseif selectedCase=="tool_current_cwd_drives_new_instance" then
@@ -531,20 +558,24 @@ return function(tools, tern, state, cx, fresh, selectedCase)
         eq(cx.session:pane(original).cwd,"/work/from-inside-tool")
         eq(#toolPanes(),2)
 
-    elseif selectedCase=="incomplete_joint_snapshot_refuses_reuse" then
+    elseif selectedCase=="incomplete_process_inventory_does_not_block_reuse" then
         setup()
         local scratch=openScratch()[1].pane
         state.focus=1
         state.commands.open_lazygit.run(cx)
         local lazygit=toolPanes()[2].pane
-        state.tick()
         cx.layout:float(lazygit,2,"tl")
         state.focus=scratch
         state.inventoryIncomplete=true
         state.commands.open_lazygit.run(cx)
-        eq(cx.session:focused(),scratch)
-        eq(cx.session:pane(lazygit).floating,true)
+        local corner
+        for _,float in ipairs(cx.session:layout(11).floats) do
+            if float.pane==lazygit then corner=float.corner end
+        end
+        eq(corner,"br")
+        eq(cx.session:focused(),lazygit)
         eq(#toolPanes(),2)
+        state.inventoryIncomplete=false
 
     elseif selectedCase=="exception_without_observed_pane_blocks_retry" then
         setup()
@@ -633,32 +664,47 @@ return function(tools, tern, state, cx, fresh, selectedCase)
         eq(#toolPanes(),1)
         eq(toolPanes()[1].cwd,"/work/project")
 
-    elseif selectedCase=="creation_floats_before_identity_handshake" then
+    elseif selectedCase=="creation_presents_tool_without_typing" then
         setup()
-        state.deferPromises=true
         state.commands.open_terminal.run(cx)
         local during=toolPanes()[1]
         eq(#toolPanes(),1)
         eq(during.floating,true)
-        eq(during.focused,false)
-        eq(cx.session:focused(),1)
+        eq(cx.session:focused(),during.pane)
         eq(#state.toasts,0)
+        local typed=0
+        for _,call in ipairs(state.runCallbacks) do
+            if call.pane==during.pane then typed+=1 end
+        end
+        eq(typed,0)
         local record
         for path,value in pairs(state.identityFiles) do
             if path:match("^/virtual/plugin%-data/tools/[0-9a-f]+%.json$") then record=value end
         end
         eq(record~=nil,true)
-        eq(record.identityVerified,nil)
-        state.deferPromises=false
-        for _=1,10 do
-            if #state.promiseCallbacks==0 then break end
-            state.flushPromises()
-        end
-        local after=cx.session:pane(during.pane)
-        eq(after.floating,true)
-        eq(cx.session:focused(),during.pane)
+        eq(record.pid,state.panes[during.pane].shellPid)
         eq(#state.layouts[11].floats,1)
         eq(#state.toasts,0)
+
+    elseif selectedCase=="lazygit_launches_through_launch_command" then
+        setup()
+        state.commands.open_lazygit.run(cx)
+        local opened=toolPanes()[1]
+        eq(#toolPanes(),1)
+        eq(opened.kind,"agent")
+        eq(opened.floating,true)
+        eq(cx.session:focused(),opened.pane)
+        eq(#state.runCallbacks,0)
+        local launch
+        for _,entry in ipairs(state.splitLaunches) do
+            if entry.pane==opened.pane then launch=entry end
+        end
+        eq(launch~=nil,true)
+        eq(launch.cwd,"/work/project")
+        eq(launch.command:find("/usr/bin/env PATH=",1,true)~=nil,true)
+        eq(launch.command:find("lazygit",1,true)~=nil,true)
+        state.tick()
+        eq(#state.runCallbacks,0)
 
     elseif selectedCase=="silent_start_records_identity_without_typing" then
         setup()
@@ -675,7 +721,7 @@ return function(tools, tern, state, cx, fresh, selectedCase)
         local token
         for path in pairs(state.identityFiles) do
             local found=path:match("^/virtual/plugin%-data/tools/([0-9a-f]+)%.json$")
-            if found and state.identityFiles[path].identityVerified==nil then token=found end
+            if found then token=found end
         end
         eq(token~=nil,true)
         eq(state.identityFiles["/virtual/plugin-data/tool-start/"..token.."/pid"],
@@ -689,7 +735,7 @@ return function(tools, tern, state, cx, fresh, selectedCase)
         eq(state.identityFiles["/virtual/plugin-data/tool-start/"..token.."/pid"],nil)
         eq(state.directories["/virtual/plugin-data/tool-start/"..token],nil)
 
-    elseif selectedCase=="unsupported_shell_reports_without_adoption" then
+    elseif selectedCase=="unsupported_shell_reports_and_keeps_pane" then
         setup()
         state.shellProgram="/usr/bin/perl"
         state.commands.open_terminal.run(cx)
@@ -697,9 +743,12 @@ return function(tools, tern, state, cx, fresh, selectedCase)
         local last=state.toasts[#state.toasts]
         eq(last.level,"error")
         eq(last.detail:find("不支持")~=nil,true)
+        local paneId=toolPanes()[1].pane
+        state.focus=1
         state.commands.open_terminal.run(cx)
         eq(#toolPanes(),1)
-        eq(state.toasts[#state.toasts].title,"工具身份未确认")
+        eq(toolPanes()[1].pane,paneId)
+        eq(cx.session:focused(),paneId)
 
     elseif selectedCase=="lazygit_falls_back_to_login_path" then
         setup()
@@ -716,8 +765,8 @@ return function(tools, tern, state, cx, fresh, selectedCase)
         eq(opened.cwd,"/work/project")
         eq(state.loginProbes,1)
         local launched
-        for _,call in ipairs(state.runCallbacks) do
-            if call.pane==opened.pane then launched=call.text end
+        for _,entry in ipairs(state.splitLaunches) do
+            if entry.pane==opened.pane then launched=entry.command end
         end
         eq(launched~=nil,true)
         eq(launched:find("/opt/homebrew/bin/lazygit",1,true)~=nil,true)

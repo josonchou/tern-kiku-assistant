@@ -4,39 +4,22 @@ local state = {
     commands = {}, events = {}, panes = {}, tabs = {}, layouts = {}, focus = 1,
     runCallbacks = {}, samples = 0, nextPane = 30, nextPid = 100, nextToken = 0,
     processByPid = {}, processCallbacks = {}, pickChoices = {}, identityFiles = {}, timers = {},
-    deferProcess = false, deferPromises = false, promiseCallbacks = {}, currentSession = 9,
+    deferProcess = false, currentSession = 9,
     processInvalid = false, splitMode = nil, shellProgram = "/bin/zsh", css = {},
     isGitRepo = true, repoChecks = 0,
     directories = {}, existingPaths = {},
     env = { PATH = "/usr/bin:/bin", SHELL = "/bin/zsh" },
     loginPath = nil, loginProbes = 0,
-    deferParentFind = false, parentCallbacks = {},
-    settleCalls = 0, frozenSample = nil, settleMaxMs = 0,
+    settleCalls = 0, frozenSample = nil, settleMaxMs = 0, splitLaunches = {},
 }
 local cx = {}
 state.cx = cx
 local function promise(value, err)
-    return { next = function(_, callback)
-        if state.deferPromises then
-            table.insert(state.promiseCallbacks, function() callback(value, err, cx) end)
-        else
-            callback(value, err, cx)
-        end
-    end }
+    return { next = function(_, callback) callback(value, err, cx) end }
 end
 function state.flushProcess()
     local queued = state.processCallbacks
     state.processCallbacks = {}
-    for _, run in ipairs(queued) do run() end
-end
-function state.flushPromises()
-    local queued = state.promiseCallbacks
-    state.promiseCallbacks = {}
-    for _, run in ipairs(queued) do run() end
-end
-function state.flushParentFind()
-    local queued = state.parentCallbacks
-    state.parentCallbacks = {}
     for _, run in ipairs(queued) do run() end
 end
 function state.tick()
@@ -224,14 +207,7 @@ cx.procs = {
         return promise({ sample = sample, ["local"] = true, more = more, processes = processes })
     end,
     find = function(_, pid)
-        if pid == 100 then
-            if state.deferParentFind then
-                return { next = function(_, callback)
-                    table.insert(state.parentCallbacks, function() callback({ pid = 100, started = 50 }, nil, cx) end)
-                end }
-            end
-            return promise({ pid = 100, started = 50 })
-        end
+        if pid == 100 then return promise({ pid = 100, started = 50 }) end
         local process = state.processByPid[pid]
         return promise(process and table.clone(process))
     end,
@@ -250,23 +226,34 @@ cx.layout = {
         if state.splitMode == "throw_before_create" then error("split rejected") end
         local owner = assert(targetPane(target), "split target must be tiled")
         local requested = (launch and launch.cwd) or owner.cwd
-        -- The host half runs the production spawn filter; only then does the
-        -- shell start. A claimed launch records its first PID before exec.
-        local spec = { program = state.shellProgram, args = { "-l" }, cwd = requested }
-        local modified = (state.identity and state.identity.spawn(spec)) or spec
         state.nextPane += 1
         local pane = state.nextPane
-        state.addPane(pane, { cwd = modified.cwd, tab = owner.tab, at_prompt = true, busy = false })
-        if modified.args[1] ~= "-l"
-            and state.identityFiles[requested .. "/error"] == nil then
-            state.nextPid += 1
-            if not state.processInvalid then
-                state.processByPid[state.nextPid] = {
-                    pid = state.nextPid, started = state.nextPid + 1000, parent = 100,
-                }
+        if launch and launch.command then
+            -- A command launch replaces the interactive shell: Tern reports an
+            -- agent pane, nothing is typed and no private launch dir exists.
+            state.addPane(pane, {
+                cwd = requested, tab = owner.tab, at_prompt = false,
+                busy = false, kind = "agent",
+            })
+            table.insert(state.splitLaunches, { pane = pane, command = launch.command, cwd = requested })
+        else
+            -- The host half runs the production spawn filter; only then does the
+            -- shell start. A claimed launch records its first PID before exec.
+            local spec = { program = state.shellProgram, args = { "-l" }, cwd = requested }
+            local modified = (state.identity and state.identity.spawn(spec)) or spec
+            state.addPane(pane, { cwd = modified.cwd, tab = owner.tab, at_prompt = true, busy = false })
+            table.insert(state.splitLaunches, { pane = pane, cwd = requested })
+            if modified.args[1] ~= "-l"
+                and state.identityFiles[requested .. "/error"] == nil then
+                state.nextPid += 1
+                if not state.processInvalid then
+                    state.processByPid[state.nextPid] = {
+                        pid = state.nextPid, started = state.nextPid + 1000, parent = 100,
+                    }
+                end
+                state.identityFiles[requested .. "/pid"] = tostring(state.nextPid)
+                state.panes[pane].shellPid = state.nextPid
             end
-            state.identityFiles[requested .. "/pid"] = tostring(state.nextPid)
-            state.panes[pane].shellPid = state.nextPid
         end
         assert(tile(pane, target, direction))
         reveal(pane, options)
