@@ -5,9 +5,11 @@ local removal = require("./lib/removal")
 local configModule = require("./lib/config")
 local executableModule = require("./lib/executables")
 local toolsModule = require("./lib/tools")
+local styleModule = require("./lib/style")
 
 local config, configError = configModule.read()
 local executables = executableModule.new(config.executables)
+if tern.css then tern.css("active-block", styleModule.activeBlock) end
 -- Reload does not replay window_start; start the nonblocking probe at load.
 executables:refresh(nil)
 

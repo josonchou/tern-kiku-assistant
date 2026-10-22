@@ -36,15 +36,10 @@ def bridge_from_calls(log, start=0):
     raise AssertionError("No fixture Git invocation used a private lazygit bridge")
 
 
-def end_tool(h, pane):
-    h.lua(f"cx.layout:focus({pane}); return true")
-    h.ctl("key ctrl+b")
-    h.ctl("key shift+q")
-    h.wait_for(lambda state: bool(state.get("picker")), "tool end confirmation opens")
-    h.ctl("picker down 1")
-    h.ctl("key enter")
+def close_tool_natively(h, pane):
+    h.lua(f"cx.layout:close({pane}); return true")
     h.wait_for(lambda _: h.lua_json(f"cx.session:pane({pane})") is None,
-               "confirmed tool end closes its own pane")
+               "native close removes its tool pane")
 
 def open_real_lazygit(h):
     before = {pane["pane"] for pane in h.lua_json("cx.session:panes()")}
@@ -148,20 +143,56 @@ def run(h):
     assert not (h.plugin / injection).exists()
     h.record("configured lazygit shortcut displays real repository UI using its selected Git executable")
     lazygit_pane = opened["pane"]
+    h.open_repo(h.repo)
+    moved_to_tab = h.lua_json('cx.session:pane("@focused")')
+    h.lua(
+        f"local ok, err = cx.layout:move_to_tab({lazygit_pane}, "
+        f"{moved_to_tab['tab']}, {{focus = true}}); assert(ok, err); return true"
+    )
+    h.lua(f"cx.layout:focus({source['pane']}); return true")
+    for chord in keybinding.split(">"):
+        h.ctl("key " + chord)
+    h.wait_for(
+        lambda _: bool(
+            (pane := h.lua_json(f"cx.session:pane({lazygit_pane})"))
+            and pane.get("tab") == source["tab"]
+            and pane.get("floating") is True and pane.get("focused") is True
+        ),
+        "opening from origin tab brings manually moved lazygit back without restart",
+    )
+    assert process_alive(lazygit_pid) and bridge.exists()
+    alternate_source = int(h.lua(
+        f"return cx.layout:split({source['pane']}, 'right', {{cwd={json.dumps(source['cwd'], ensure_ascii=False)}}})"
+    ))
+    panes_before_same_directory_open = {pane["pane"] for pane in h.lua_json("cx.session:panes()")}
+    h.lua(f"cx.layout:focus({alternate_source}); return true")
+    for chord in keybinding.split(">"):
+        h.ctl("key " + chord)
+    h.wait_for(
+        lambda _: bool(
+            (pane := h.lua_json(f"cx.session:pane({lazygit_pane})"))
+            and pane.get("tab") == source["tab"] and pane.get("focused") is True
+        ),
+        "same-tab same-directory different source reuses lazygit",
+    )
+    assert {pane["pane"] for pane in h.lua_json("cx.session:panes()")} == \
+        panes_before_same_directory_open
+    panes_before_scratch = {pane["pane"] for pane in h.lua_json("cx.session:panes()")}
     h.ctl("key ctrl+b")
     h.ctl("key t")
     scratch = {}
     def scratch_opened(_state):
         panes = h.lua_json("cx.session:panes()")
-        new = [pane for pane in panes if pane["pane"] not in before | {lazygit_pane}]
+        new = [pane for pane in panes if pane["pane"] not in panes_before_scratch]
         if not new:
             return False
         assert len(new) == 1, panes
         scratch.update(new[0])
         lazygit = h.lua_json(f"cx.session:pane({lazygit_pane})")
         return bool(new[0].get("floating") is True and new[0].get("focused") is True
-                    and lazygit and lazygit.get("parked") is True)
-    h.wait_for(scratch_opened, "same-source scratch terminal parks the live lazygit pane")
+                    and lazygit and lazygit.get("parked") is not True)
+    h.wait_for(scratch_opened, "same-source scratch coexists with floating lazygit")
+    h.lua(f"cx.layout:float({lazygit_pane}, {source['pane']}); return true")
     h.ctl("key ctrl+b")
     h.ctl("key alt+g")
     h.wait_for(
@@ -169,9 +200,9 @@ def run(h):
             (pane := h.lua_json(f"cx.session:pane({lazygit_pane})"))
             and pane.get("floating") is True and pane.get("focused") is True
             and pane.get("parked") is not True
-            and h.lua_json(f"cx.session:pane({scratch['pane']})").get("parked") is True
+            and h.lua_json(f"cx.session:pane({scratch['pane']})").get("parked") is not True
         ),
-        "same-source lazygit shortcut restores the original lazygit and parks scratch terminal",
+        "same-source lazygit open restores floating layout without parking scratch",
     )
     h.ctl("key q")
     h.wait_for(
@@ -196,13 +227,13 @@ def run(h):
         other_open.update(new[0])
         return bool(new[0].get("floating") is True and new[0].get("focused") is True)
 
-    h.wait_for(other_lazygit_opened, "a second source receives its own lazygit instance")
+    h.wait_for(other_lazygit_opened, "a second tab with the same cwd gets its own lazygit instance")
     assert other_open["pane"] != lazygit_pane
     assert other_open["tab"] == other_source["tab"]
     h.ctl("key q")
     h.wait_for(lambda _: h.lua_json(f"cx.session:pane({other_open['pane']})") is None,
                "second-source lazygit exits independently")
-    h.record("different sources never reuse each other's lazygit pane")
+    h.record("different tabs with the same directory never reuse each other's lazygit pane")
     fallback_config = json.loads((h.plugin / "config.json").read_text())
     fallback_config["executables"] = {
         "git": str(h.root / "missing configured git"),
@@ -275,8 +306,8 @@ def run(h):
         assert len(new) == 1, new
         orphan_terminal.update(new[0])
         return bool(new[0].get("floating") is True and new[0].get("focused") is True
-                    and h.lua_json(f"cx.session:pane({orphan_lazygit_pane})").get("parked") is True)
-    h.wait_for(orphan_terminal_opened, "same-source scratch terminal parks a second live lazygit")
+                    and h.lua_json(f"cx.session:pane({orphan_lazygit_pane})").get("parked") is not True)
+    h.wait_for(orphan_terminal_opened, "same-source scratch coexists with a second live lazygit")
     orphan_terminal_pane = orphan_terminal["pane"]
     h.lua(f"cx.layout:focus({orphan_source['pane']}); return true")
     h.wait_for(
@@ -289,57 +320,22 @@ def run(h):
     h.wait_for(
         lambda _: h.lua_json(f"cx.session:pane({orphan_source['pane']})") is None
         and bool((lazy := h.lua_json(f"cx.session:pane({orphan_lazygit_pane})"))
-                 and lazy.get("parked") is True)
+                 and lazy.get("parked") is not True)
         and bool((scratch := h.lua_json(f"cx.session:pane({orphan_terminal_pane})"))
-                 and scratch.get("parked") is True),
-        "source closure parks both independently owned live tools",
+                 and scratch.get("parked") is not True),
+        "source closure leaves both independently owned live tools visible",
     )
     orphan_bridge = bridge_from_calls(
         h.root / "configured git invocations", orphan_git_start
     )
     assert orphan_bridge.exists(), orphan_bridge
     h.ctl("shot lazygit-and-terminal-source-closed")
-    h.open_repo(h.repo)
-    focus_before_restore = h.lua_json("cx.session:focused()")
-    focused_context = h.lua_json(f"cx.session:pane({focus_before_restore})")
-    restored_tabs = []
-    restored_ids = set()
-    for index in range(2):
-        h.ctl("plugins run plugin.kiku.restore_tools")
-        h.wait_for(lambda state: bool(state.get("picker")), "orphan tools picker opens")
-        h.ctl("key enter")
-        restored = {}
-        def one_orphan_restored(_state):
-            active = [
-                (pane_id, pane) for pane_id in (orphan_lazygit_pane, orphan_terminal_pane)
-                if (pane := h.lua_json(f"cx.session:pane({pane_id})"))
-                and pane.get("parked") is not True
-            ]
-            new = [(pane_id, pane) for pane_id, pane in active if pane_id not in restored_ids]
-            if len(active) != index + 1 or len(new) != 1:
-                return False
-            restored.update(pane_id=new[0][0], pane=new[0][1])
-            return True
-        h.wait_for(one_orphan_restored, "one source-less tool restores to its own tab")
-        restored_pane_id = restored["pane_id"]
-        restored_pane = restored["pane"]
-        restored_ids.add(restored_pane_id)
-        assert restored_pane["tab"] != focused_context["tab"], restored_pane
-        assert restored_pane["tab"] not in restored_tabs, restored_pane
-        restored_tabs.append(restored_pane["tab"])
-        h.ctl("wait 1000")
-        assert h.lua_json("cx.session:focused()") == focus_before_restore, \
-            "Restoring a source-less tool unexpectedly changed user focus"
-        assert h.lua_json(f"cx.session:pane({restored_pane_id})").get("parked") is not True, \
-            "Source observer re-parked a tool after its independent restore"
-    assert orphan_bridge.exists(), "Source closure or restore removed a live lazygit bridge"
-    h.record("closing one source parks both live tools; independent restores preserve focus and bridge")
     h.lua(f"cx.layout:focus({orphan_lazygit_pane}); return true")
     h.ctl("key q")
     h.wait_for(lambda _: h.lua_json(f"cx.session:pane({orphan_lazygit_pane})") is None,
-               "orphan lazygit exits normally after independent recovery")
+               "lazygit exits normally after source pane closes")
     h.wait_for(lambda _: not orphan_bridge.exists(), "orphan lazygit exit removes only its bridge")
-    end_tool(h, orphan_terminal_pane)
+    close_tool_natively(h, orphan_terminal_pane)
 
     h.open_repo(h.repo)
     failure_source = h.lua_json('cx.session:pane("@focused")')
@@ -453,6 +449,7 @@ def run(h):
     h.open_repo(h.repo)
     dependency_git_start = len(git_log.read_text().splitlines())
     dependency_launch_count = len(lazygit_launches(lazygit_log))
+    dependency_source = h.lua_json('cx.session:pane("@focused")')
     dependency_open = open_real_lazygit(h)
     dependency_pane = dependency_open["pane"]
     dependency_launches = lazygit_launches(lazygit_log)[dependency_launch_count:]
@@ -466,32 +463,50 @@ def run(h):
     assert not dependency_executable.exists(), dependency_executable
     h.ctl("key ctrl+b")
     h.ctl("key q")
+    assert not h.state().get("picker"), "q on lazygit opened an unexpected picker"
     h.wait_for(
         lambda _: bool((pane := h.lua_json(f"cx.session:pane({dependency_pane})"))
                        and pane.get("parked") is True),
-        "verified live lazygit remains hideable after its launch executable disappears",
+        "q parks lazygit after executable removal without restarting it",
     )
     assert process_alive(dependency_pid) and dependency_bridge.exists()
-    h.ctl("shot lazygit-missing-executable-hidden")
-    h.ctl("key ctrl+b")
-    h.ctl("key alt+g")
+    h.lua(f"cx.layout:focus({dependency_source['pane']}); return true")
+    h.ctl("plugins run plugin.kiku.open_lazygit")
     h.wait_for(
         lambda _: bool((pane := h.lua_json(f"cx.session:pane({dependency_pane})"))
-                       and pane.get("floating") is True and pane.get("focused") is True
-                       and pane.get("parked") is not True),
-        "verified live lazygit restores after its launch executable disappears",
+                       and pane.get("parked") is not True
+                       and pane.get("floating") is True and pane.get("focused") is True),
+        "opening an existing lazygit after executable removal reuses its process",
+    )
+    h.ctl("key ctrl+b")
+    h.ctl("key shift+q")
+    h.wait_for(lambda state: bool(state.get("picker")), "Shift+Q on lazygit opens the end confirmation")
+    h.ctl("key esc")
+    h.wait_for(lambda state: not state.get("picker"), "canceling the end confirmation closes it")
+    h.wait_for(
+        lambda _: bool((pane := h.lua_json(f"cx.session:pane({dependency_pane})"))
+                       and pane.get("parked") is not True and pane.get("exited") is None),
+        "canceling the end confirmation keeps lazygit running",
     )
     assert process_alive(dependency_pid) and dependency_bridge.exists()
     assert len(lazygit_launches(lazygit_log)) == dependency_launch_count + 1, \
-        "Restoring the live instance attempted to run the removed executable again"
-    end_tool(h, dependency_pane)
+        "Management keys attempted to run the removed executable again"
+    dependency_panes = {pane["pane"] for pane in h.lua_json("cx.session:panes()")}
+    assert {pane["pane"] for pane in h.lua_json("cx.session:panes()")} == dependency_panes
+    assert process_alive(dependency_pid) and dependency_bridge.exists()
+    assert len(lazygit_launches(lazygit_log)) == dependency_launch_count + 1, \
+        "Reusing a live instance attempted to run the removed executable again"
+    h.lua(f"cx.layout:close({dependency_pane}); return true")
+    h.wait_for(lambda _: h.lua_json(f"cx.session:pane({dependency_pane})") is None,
+               "native close removes the lazygit pane")
     h.wait_for(lambda _: not process_alive(dependency_pid),
-               "explicit end stops the same verified lazygit process")
+               "native close ends the same verified lazygit process")
     h.wait_for(lambda _: not dependency_bridge.exists(),
-               "explicit end removes the confirmed lazygit bridge")
-    h.record("verified lazygit can hide, restore and end after its launch executable disappears")
+               "native close removes the confirmed lazygit bridge")
+    h.record("management keys hide and confirm lazygit without rerunning a removed executable; native close ends its process")
 
 def run_non_git(h, expected_wrapper=None):
+    from management import _has_error_alert
 
     private_config = h.root / "lazygit config"
     private_config.mkdir(parents=True, exist_ok=True)
@@ -504,41 +519,28 @@ def run_non_git(h, expected_wrapper=None):
     configured = json.loads((h.plugin / "config.json").read_text())
     lazygit_log = h.root / "lazygit executable invocations"
     launches_before = len(lazygit_launches(lazygit_log))
-    if expected_wrapper is None:
-        expected_wrapper = configured["executables"]["lazygit"]
     keybinding = configured.get("lazygitKeybinding") or "ctrl+b>alt+g"
     for chord in keybinding.split(">"):
         h.ctl("key " + chord)
 
-    opened = {}
-
-    def non_git_lazygit_opened(_state):
-        panes = h.lua_json("cx.session:panes()")
-        new = [pane for pane in panes if pane["pane"] not in before]
-        if not new:
-            return False
-        assert len(new) == 1, panes
-        pane = new[0]
-        assert pane.get("kind") == "terminal", pane
-        if pane.get("floating") is not True or pane.get("focused") is not True:
-            return False
-        opened.update(pane)
-        return True
-
-    h.wait_for(non_git_lazygit_opened, "lazygit starts in a non-Git source directory")
-    assert opened["cwd"] == source["cwd"] == str(source_path), (source, opened)
-    assert opened["tab"] == source["tab"], (source, opened)
+    h.wait_for(lambda _: _has_error_alert(h.ctl("tree")),
+               "lazygit refuses a non-Git source before creating a pane")
+    assert {pane["pane"] for pane in h.lua_json("cx.session:panes()")} == before, \
+        "non-Git lazygit refusal created a pane"
+    assert len(lazygit_launches(lazygit_log)) == launches_before, \
+        "non-Git lazygit refusal started the lazygit executable"
     assert not (source_path / ".git").exists(), "plugin initialized a repository"
-    h.wait_for(lambda _: len(lazygit_launches(lazygit_log)) > launches_before,
-               "non-Git source starts the real lazygit process")
-    launches = lazygit_launches(lazygit_log)[launches_before:]
-    assert [path for path, _ in launches] == [expected_wrapper], launches
-    assert process_alive(launches[0][1]), launches
-    end_tool(h, opened["pane"])
-    h.wait_for(lambda _: not process_alive(launches[0][1]),
-               "confirmed plugin end stops the real lazygit process")
-    assert not (source_path / ".git").exists(), "plugin initialized a repository"
-    h.record("real lazygit starts from a non-Git source without initializing a repository")
+    h.lua(f"cx.layout:focus({source['pane']}); return true")
+    h.ctl("plugins run plugin.kiku.open_terminal")
+    h.wait_for(
+        lambda _: bool((pane := h.lua_json('cx.session:pane("@focused")'))
+                       and pane.get("floating") is True
+                       and pane.get("cwd") == str(source_path)),
+        "a scratch terminal still opens in the non-Git source directory",
+    )
+    h.ctl("shot lazygit-non-git-refusal")
+    h.record("lazygit refuses a non-Git source before creating a pane; scratch terminal still opens there")
+
 def run_config_errors(h):
     from management import _has_error_alert
 
@@ -616,11 +618,10 @@ def run_restart(h):
     )
     restarted = h.lua_json(f"cx.session:pane({pane_id})")
     launch_count = len(lazygit_launches(lazygit_log))
-    h.lua(f"cx.layout:focus({source['pane']}); return true")
-    h.ctl("key ctrl+b")
-    h.ctl("key t")
+    h.lua(f"cx.layout:focus({pane_id}); return true")
+    h.ctl("plugins run plugin.kiku.open_lazygit")
     h.wait_for(lambda _: _has_error_alert(h.ctl("tree")),
-               "switch refuses to park an unknown Restarted lazygit peer")
+               "lazygit open refuses the unverified restarted generation")
     assert {pane["pane"] for pane in h.lua_json("cx.session:panes()")} == before | {pane_id}, \
         "Refusing an unknown peer must not create a terminal pane"
     after = h.lua_json(f"cx.session:pane({pane_id})")

@@ -2,5 +2,6 @@ schema = 1
 id = "kiku"
 name = "Kiku 助手"
 version = "0.1.0"
-description = "Manage Git worktrees and use source-pane-following lazygit and scratch terminal tools in Tern."
+description = "在 Tern 中管理 Git 工作树，按标签页和启动目录复用 lazygit 与临时终端画中画，并为主题色激活 block 描边。"
 window = "window.luau"
+host = "host.luau"

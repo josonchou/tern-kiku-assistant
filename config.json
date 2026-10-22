@@ -1,5 +1,8 @@
 {
   "defaultPath": "",
   "keybinding": "ctrl+b>shift+g",
-  "manageKeybinding": "ctrl+b>shift+o"
+  "manageKeybinding": "ctrl+b>shift+o",
+  "executables": {
+    "lazygit": "/opt/homebrew/bin/lazygit"
+  }
 }

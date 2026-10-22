@@ -1,5 +1,6 @@
 """Real Tern scratch-terminal lifecycle through native keyboard shortcuts."""
 
+import json
 import os
 from pathlib import Path
 import shlex
@@ -94,6 +95,53 @@ def run(h):
     assert Path(cwd_file.read_text().strip()).resolve() == source_directory.resolve()
     assert not (source_directory / ".git").exists()
 
+    second_origin_id = int(h.lua(
+        f"return cx.layout:split({source_id}, 'right', {{cwd={json.dumps(str(source_directory), ensure_ascii=False)}}})"
+    ))
+    h.lua(f"cx.layout:focus({second_origin_id}); return true")
+    h.lua('cx.actions:run("plugin.kiku.open_terminal")')
+    h.wait_for(
+        lambda _: bool(
+            h.lua_json(f"cx.session:pane({tool_id})")
+            and h.lua_json(f"cx.session:pane({tool_id})").get("focused") is True
+        ),
+        "same-tab same-directory different source reuses scratch",
+    )
+    assert {pane["pane"] for pane in h.lua_json("cx.session:panes()")} == before | {
+        tool_id, second_origin_id
+    }
+    other_directory = h.root / "same-tab different launch directory"
+    other_directory.mkdir()
+    other_origin_id = int(h.lua(
+        f"return cx.layout:split({source_id}, 'right', {{cwd={json.dumps(str(other_directory), ensure_ascii=False)}}})"
+    ))
+    panes_before_other_cwd = {pane["pane"] for pane in h.lua_json("cx.session:panes()")}
+    h.lua(f"cx.layout:focus({other_origin_id}); return true")
+    h.lua('cx.actions:run("plugin.kiku.open_terminal")')
+    other_cwd_tool = {}
+    def other_cwd_opened(_state):
+        new = [pane for pane in h.lua_json("cx.session:panes()")
+               if pane["pane"] not in panes_before_other_cwd]
+        if not new:
+            return False
+        assert len(new) == 1, new
+        other_cwd_tool.update(new[0])
+        return bool(new[0].get("floating") is True and new[0].get("focused") is True)
+    h.wait_for(other_cwd_opened, "same-tab different launch directory creates a distinct scratch")
+    assert other_cwd_tool["pane"] != tool_id
+    assert Path(other_cwd_tool["cwd"]).resolve() == other_directory.resolve()
+    h.lua(f"cx.layout:close({other_cwd_tool['pane']}); return true")
+    h.wait_for(
+        lambda _: h.lua_json(f"cx.session:pane({other_cwd_tool['pane']})") is None,
+        "different-directory scratch closes natively after isolation check",
+    )
+    h.lua(f"cx.layout:focus({second_origin_id}); return true")
+    h.lua('cx.actions:run("plugin.kiku.open_terminal")')
+    h.wait_for(
+        lambda _: bool(h.lua_json(f"cx.session:pane({tool_id})")
+                       and h.lua_json(f"cx.session:pane({tool_id})").get("focused") is True),
+        "returning to the original launch directory reuses its scratch",
+    )
     h.ctl("key ctrl+b")
     h.ctl("key q")
 
@@ -101,7 +149,7 @@ def run(h):
         panes = {pane["pane"]: pane for pane in h.lua_json("cx.session:panes()")}
         tool = panes.get(tool_id)
         return bool(tool and tool.get("parked") is True
-                    and panes.get(source_id, {}).get("focused") is True)
+                    and panes.get(second_origin_id, {}).get("focused") is True)
 
     h.wait_for(hidden, "hide parks the tool and restores source-pane focus")
     assert task_alive(), "Hiding the tool ended its real foreground task"
@@ -117,7 +165,8 @@ def run(h):
                     and pane.get("floating") is True and pane.get("parked") is not True)
     h.wait_for(restored, "open restores the same floating scratch-terminal pane")
 
-    assert {pane["pane"] for pane in h.lua_json("cx.session:panes()")} == before | {tool_id}
+    assert {pane["pane"] for pane in h.lua_json("cx.session:panes()")} == \
+        before | {tool_id, second_origin_id, other_origin_id}
     assert task_alive(), "Restoring the tool lost its original foreground task"
     assert int(pid_file.read_text().strip()) == task_pid
     assert Path(cwd_file.read_text().strip()).resolve() == source_directory.resolve()
@@ -135,8 +184,7 @@ def run(h):
     )
     assert task_alive(), "Default end choice interrupted the running task"
 
-    second_source = h.root / "second non Git source"
-    second_source.mkdir()
+    second_source = source_directory
     h.open_repo(second_source)
     second = h.lua_json('cx.session:pane("@focused")')
     assert second and second["pane"] != source_id
@@ -169,7 +217,7 @@ def run(h):
         second_tool.update(new[0])
         return bool(new[0].get("floating") is True and new[0].get("focused") is True)
 
-    h.wait_for(second_opened, "a different source gets an isolated tool")
+    h.wait_for(second_opened, "a different tab gets an isolated tool")
     assert second_tool["pane"] != tool_id
     assert second_tool["tab"] == second["tab"]
     background_pid_file = h.root / "tool background pid.txt"
@@ -272,7 +320,7 @@ def run(h):
     h.wait_for(original_tool_focused, "the original source reuses its own tool")
     assert task_alive()
     h.ctl("shot scratch-terminal-source-isolation")
-    h.record("same-source reuse, cross-source isolation and cancel-by-default end safety")
+    h.record("same-tab/cwd reuse, cross-tab isolation and cancel-by-default end safety")
     h.lua(f"cx.layout:focus({source_id}); return true")
     h.wait_for(
         lambda _: bool((pane := h.lua_json(f"cx.session:pane({source_id})"))
@@ -285,25 +333,12 @@ def run(h):
         lambda _: h.lua_json(f"cx.session:pane({source_id})") is None,
         "source terminal exits normally through its real shell",
     )
-    def parked_after_source_close(_state):
+    def unchanged_after_source_close(_state):
         pane = h.lua_json(f"cx.session:pane({tool_id})")
-        return bool(pane and pane.get("parked") is True)
-    h.wait_for(parked_after_source_close, "source closure parks its surviving tool")
+        return bool(pane and pane.get("parked") is not True)
+    h.wait_for(unchanged_after_source_close, "source closure leaves its live tool visible")
     assert task_alive(), "Closing the source ended the tool task"
-    old_focus_id = h.lua_json("cx.session:focused()")
-    h.ctl("plugins run plugin.kiku.restore_tools")
-    h.wait_for(lambda state: bool(state.get("picker")), "orphan tool recovery picker opens")
-    h.ctl("key enter")
-    def restored_independently(_state):
-        pane = h.lua_json(f"cx.session:pane({tool_id})")
-        return bool(pane and pane.get("parked") is not True and pane.get("tab") != source["tab"])
-    h.wait_for(restored_independently, "user restores the same tool as an independent tab")
-    h.ctl("wait 1000")
-    assert restored_independently(None), "Source observation parked an explicitly restored independent tool"
-    assert h.lua_json("cx.session:focused()") == old_focus_id, \
-        "Restoring an orphan tool unexpectedly changed the user's focus"
-    assert task_alive(), "Restoring the source-less tool ended its process"
-    h.record("source closure parks the live tool and explicit restore preserves it in an independent tab")
+    h.record("closing a source leaves the live tool visible and preserves its process")
     h.lua(f"cx.layout:focus({tool_id}); return true")
     h.ctl("key ctrl+z")
     h.wait_for(
@@ -324,9 +359,10 @@ def run(h):
                  and pane.get("last", {}).get("status") == 0),
         "terminal completes a real 2500-line shell command",
     )
-    h.lua('cx.actions:run("clear")')
     scrollback = h.lua_json(f"cx.session:read({tool_id}, {{lines = 2000}})")
     assert "KIKU_TOOL_" not in str(scrollback), scrollback
+    assert "/bin/sh -c 'printf" not in str(scrollback), scrollback
+    h.lua('cx.actions:run("clear")')
     assert task_alive(), "Long shell output ended the suspended original task"
     h.type_text("fg")
     h.ctl("key enter")
@@ -404,29 +440,16 @@ def run(h):
     )
     h.wait_for(
         lambda _: bool((pane := h.lua_json(f"cx.session:pane({cmdw_tool_id})"))
-                       and pane.get("parked") is True),
-        "native source closure observation parks the same tool",
+                       and pane.get("parked") is not True),
+        "native source closure leaves the live tool visible",
     )
     assert cmdw_task_alive(), "Native Cmd+W source closure ended the tool process"
-    focus_before_cmdw_restore = h.lua_json("cx.session:focused()")
-    h.ctl("plugins run plugin.kiku.restore_tools")
-    h.wait_for(lambda state: bool(state.get("picker")), "Cmd+W orphan recovery picker opens")
-    h.ctl("key enter")
-    h.wait_for(
-        lambda _: bool((pane := h.lua_json(f"cx.session:pane({cmdw_tool_id})"))
-                       and pane.get("parked") is not True and pane.get("tab") != cmdw_source["tab"]),
-        "Cmd+W restores the same terminal as an independent tab",
-    )
-    assert h.lua_json("cx.session:focused()") == focus_before_cmdw_restore, \
-        "Restoring after native Cmd+W unexpectedly changed focus"
-    assert cmdw_task_alive(), "Restoring after native Cmd+W ended the tool process"
-    restored_cmdw_tool = h.lua_json(f"cx.session:pane({cmdw_tool_id})")
-    assert Path(restored_cmdw_tool["cwd"]).resolve() == cmdw_directory.resolve(), \
-        "Cmd+W recovery changed the original tool cwd"
+    preserved_tool = h.lua_json(f"cx.session:pane({cmdw_tool_id})")
+    assert Path(preserved_tool["cwd"]).resolve() == cmdw_directory.resolve(), \
+        "Cmd+W source closure changed the original tool cwd"
     os.kill(cmdw_pid, 15)
     h.wait_for(lambda _: not cmdw_task_alive(), "Cmd+W regression task is cleaned up")
-    h.record("native Cmd+W source closure parks and restores the same live process without stealing focus")
-
+    h.record("native Cmd+W source closure leaves the same live process visible")
     stale_source_directory = h.root / "stale identity source"
     stale_source_directory.mkdir()
     h.open_repo(stale_source_directory)
@@ -484,7 +507,7 @@ def run(h):
     h.ctl("key t")
     h.wait_for(
         lambda _state: _has_error_alert(h.ctl("tree")),
-        "a still-present parked legacy pane blocks duplicate startup",
+        "same-key parked legacy pane blocks duplicate startup",
     )
     assert stale_pid_alive(), "Parked legacy refusal ended its task"
     assert {pane["pane"] for pane in h.lua_json("cx.session:panes()")} == panes_after_reload
@@ -568,13 +591,18 @@ def run(h):
         ["/bin/ps", "-p", str(unknown_pid), "-o", "pid="],
         capture_output=True, text=True, timeout=5,
     ).returncode == 0
-    marker_output = h.lua_json(f"cx.session:read({unknown_tool_id}, {{lines = 2000}})")
-    marker_lines = marker_output.get("lines", [])
-    marker_line = next((line for line in marker_lines if "KIKU_TOOL_V1:" in line), None)
-    assert marker_line, "Native tool output did not expose its random marker"
-    marker_value = marker_line.split("KIKU_TOOL_V1:", 1)[1].split(":", 1)
-    marker_token = marker_value[0]
+    # The shell records its identity in the private launch directory, so the
+    # pane's own output must never expose an internal handshake or its token.
+    unknown_scrollback = h.lua_json(f"cx.session:read({unknown_tool_id}, {{lines = 2000}})")
+    assert "KIKU_TOOL" not in str(unknown_scrollback), unknown_scrollback
+    assert "/bin/sh -c 'printf" not in str(unknown_scrollback), unknown_scrollback
+    unknown_records = [json.loads(path.read_text()) for path in
+                       h.root.rglob("plugin-data/kiku/tools/*.json")]
+    unknown_record = next(record for record in unknown_records
+                          if record.get("pane") == unknown_tool_id)
+    marker_token = unknown_record["token"]
     assert len(marker_token) == 32 and all(char in "0123456789abcdef" for char in marker_token)
+    assert marker_token not in str(unknown_scrollback), unknown_scrollback
     unknown_output_done = h.root / "unknown reload output finished.txt"
     h.type_text(
         "i=0; while [ $i -lt 2500 ]; do printf 'unknown-output-%s\\n' \"$i\"; "
@@ -587,9 +615,6 @@ def run(h):
                  and pane.get("at_prompt") is True and pane.get("last", {}).get("status") == 0),
         "independent tool completes long output that removes its old identity marker",
     )
-    h.lua('cx.actions:run("clear")')
-    unknown_scrollback = h.lua_json(f"cx.session:read({unknown_tool_id}, {{lines = 2000}})")
-    assert "KIKU_TOOL_" not in str(unknown_scrollback), unknown_scrollback
     marker_source_directory = h.root / "marker-only ordinary source"
     marker_source_directory.mkdir()
     h.open_repo(marker_source_directory)
@@ -679,6 +704,86 @@ def run(h):
     assert h.lua_json(f"cx.session:pane({unknown_source['pane']})"), \
         "Unknown-tool cleanup closed its independent source pane"
     h.record("post-reload markerless tool pane is rejected as an owner without nesting or termination")
+    orphan_directory = h.root / "orphan scratch origin"
+    orphan_directory.mkdir()
+    h.open_repo(orphan_directory)
+    orphan_source = h.lua_json('cx.session:pane("@focused")')
+    orphan_source_tab = orphan_source["tab"]
+    orphan_before = {pane["pane"] for pane in h.lua_json("cx.session:panes()")}
+    h.ctl("key ctrl+b")
+    h.ctl("key t")
+    orphan_tool = {}
+    def orphan_opened(_state):
+        new = [pane for pane in h.lua_json("cx.session:panes()")
+               if pane["pane"] not in orphan_before]
+        if not new:
+            return False
+        assert len(new) == 1, new
+        orphan_tool.update(new[0])
+        return bool(new[0].get("floating") is True and new[0].get("focused") is True)
+    h.wait_for(orphan_opened, "isolated origin opens scratch for tab-loss recovery")
+    orphan_tool_id = orphan_tool["pane"]
+    h.wait_for(
+        lambda _: h.lua_json(f"cx.session:pane({orphan_tool_id})").get("at_prompt") is True,
+        "orphan recovery shell reaches its prompt",
+    )
+    orphan_pid_file = h.root / "orphan recovery task pid.txt"
+    orphan_cwd_file = h.root / "orphan recovery task cwd.txt"
+    orphan_script = (
+        f"/bin/pwd -P > {shlex.quote(str(orphan_cwd_file))}; "
+        f"printf '%s\\n' \"$$\" > {shlex.quote(str(orphan_pid_file))}; "
+        "exec /bin/sleep 300"
+    )
+    h.type_text("/bin/sh -c " + shlex.quote(orphan_script))
+    h.ctl("key enter")
+    h.wait_for(lambda _: orphan_pid_file.exists(), "orphan recovery task reports a real PID")
+    orphan_pid = int(orphan_pid_file.read_text().strip())
+    def orphan_task_alive():
+        result = subprocess.run(
+            ["/bin/ps", "-p", str(orphan_pid), "-o", "comm="],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0 or Path(result.stdout.strip()).name != "sleep":
+            return False
+        os.kill(orphan_pid, 0)
+        return True
+    h.wait_for(lambda _: orphan_task_alive(), "orphan recovery task is a live native process")
+    assert Path(orphan_cwd_file.read_text().strip()).resolve() == orphan_directory.resolve()
+    h.ctl("key ctrl+b")
+    h.ctl("key q")
+    h.wait_for(
+        lambda _: h.lua_json(f"cx.session:pane({orphan_tool_id})").get("parked") is True,
+        "scratch parks before its origin tab closes",
+    )
+    h.open_repo(h.repo)
+    destination = h.lua_json('cx.session:pane("@focused")')
+    destination_tab = destination["tab"]
+    h.lua(f"cx.layout:close({orphan_source['pane']}); return true")
+    h.wait_for(
+        lambda _: h.lua_json(f"cx.session:pane({orphan_source['pane']})") is None,
+        "closing the last tiled origin pane removes the origin tab",
+    )
+    assert all(
+        pane["tab"] != orphan_source_tab
+        for pane in h.lua_json("cx.session:panes()")
+        if pane["pane"] != orphan_tool_id
+    )
+    assert orphan_task_alive(), "Closing the origin tab ended the parked scratch task"
+    h.ctl("plugins run plugin.kiku.restore_tools")
+    h.wait_for(lambda state: bool(state.get("picker")), "orphan scratch restore picker opens")
+    h.ctl("key enter")
+    h.wait_for(
+        lambda _: bool((pane := h.lua_json(f"cx.session:pane({orphan_tool_id})"))
+                       and pane.get("parked") is not True and pane.get("tab") == destination_tab),
+        "explicit restore rekeys parked scratch into the current tab",
+    )
+    assert orphan_task_alive(), "Rekeying orphan scratch ended its real task"
+    assert Path(h.lua_json(f"cx.session:pane({orphan_tool_id})")["cwd"]).resolve() == \
+        orphan_directory.resolve()
+    assert Path(orphan_cwd_file.read_text().strip()).resolve() == orphan_directory.resolve()
+    h.lua(f"cx.layout:close({orphan_tool_id}); return true")
+    h.wait_for(lambda _: not orphan_task_alive(), "orphan recovery process is cleaned up natively")
+    h.record("parked scratch survives origin-tab closure and explicit restore rekeys it to the current tab")
     run_remote_guard(h)
 
 

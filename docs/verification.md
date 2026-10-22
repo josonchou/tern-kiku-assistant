@@ -213,3 +213,224 @@ lazygit 的真实 `--version` 探测也会调用 Git，不能把第一条 Git �
 已另行查看最终 `tern-kiku-test-l2fd92c1/target/shots/tern/live/` 下的 `lazygit-real-tui.png` 和 `lazygit-failure-retained.png`：真实仓库差异、右下角浮窗、失败卡片及原生 Restart／Close 控件均实际可见。
 
 规范及01–04任务均已关闭。本轮8个独立实施 clone、1个临时 linked worktree 已清理，另5个历史 checkout 此前已不存在；保留原生测试产物与日志。用户 `.gitignore` 的暂存状态、`config.json` 和忽略的 `TODO.md` 均保持原样；未推送、未创建 PR、未实际重命名本地目录或远端仓库。
+
+## 快捷工具布局与固定归属复用（2026-10-21，仅代码级验收）
+
+用户在完成设计访谈后授权实施，随后明确选择“静态检查加隔离逻辑测试”，不做新版真机验收。本节取代旧记录对当前工具布局／复用行为的描述，但不改写历史112组原生回归的事实；历史结果不能证明这次改造通过原生验收。
+
+### 实现与验证范围
+
+- lazygit 右侧普通 block，临时终端右下角原生 PiP；固定创建 tab／启动目录／类型去重，重复打开恢复默认形态，不重启程序；仅临时终端保留 park／结束／恢复入口。
+- 执行实际 `lib/tools.luau`、`lib/tool_identity.luau` 和 `lib/lazygit_launch.luau`，替身只提供 Tern SDK 的布局、事件、进程采样、文件及选择器边界；没有把生产身份函数改成恒真。split tree、PiP owner/corner、采样代次、异步回调及定时器在边界内可观察、可推进。
+- 官方 Luau `0.743` 工具包只放在临时目录，没有全局安装或改项目工具链。新增公开运行入口：`python3 tests/code_validation.py --luau /path/to/luau`，可用 `--case` 单独选择场景。
+
+| 验证 | 实际结果 |
+| --- | --- |
+| 工具代码级场景 | 26场景、116条断言全部通过 |
+| 原有工作树／路径／移除纯逻辑 | 48条断言通过；未运行 Git／Tern 集成 |
+| `window.luau`、全部 `lib/*.luau`、Luau 夹具与场景编译 | 通过 |
+| 独立 `luau-analyze` | 0错误；1条原有 `tool_identity.luau:25` 的 `TableOperations` 类型推断告警（经相对／绝对路径重复显示） |
+| `tests/code_validation.py`、`tests/tools.py`、`tests/lazygit.py` Python语法 | 通过 |
+| 公开命令烟测（SDK边界替身） | 创建终端 → 停放 → 打开 lazygit → 恢复同一终端；观察到终端身份保持、lazygit仍为tiled、PiP为`br`且承载者为lazygit |
+| 规格与安全只读审查 | 所有可行动项已修正并复核，无未解决阻断项 |
+
+独立分析器使用其默认非严格模式，Tern 原生模块仍有动态类型；该结果不等同于完整 SDK 严格类型检查。实际布局／进程方法签名已与本机 Tern `0.9.5 (2863c37)` 导出声明逐项对照。没有添加类型忽略来清除原有告警。
+
+### 关键先红后绿证据
+
+- 未改实现的“同 tab、同启动目录、不同来源窗格”场景实际产生两个工具，断言 `2 != 1`；改造后复用同一 pane。
+- 异步身份核验期间来源目录变化，旧候选实现仍抢回工具焦点；新增场景失败 `31 != 1` 后补齐上下文重核。
+- 工具 Restart 后从新目录再发起打开，候选实现创建第二个工具；新增场景失败 `2 != 1` 后补齐来源身份门禁。
+- 确认结束的最后父进程查询等待期间发生 Restart，原检查顺序关闭了新代次；回归失败 `false != true` 后改成父进程先验、子代次最后核验。
+- token 准备等待期间来源 Restart，候选实现继续创建；回归失败 `2 != 1` 后在最后准备完成处重新核验来源。
+- 复用目标工具等待期间来源 Restart，候选实现切换焦点到目标；回归失败 `32 != 31` 后增加来源／目标的联合最终采样，同时拒绝截断库存。
+- 创建抛异常且未观察到 pane 时，候选实现释放占位，后续请求重新创建；回归失败 `1 != 0` 后区分正常 `nil` 与异常无候选。此为代码契约回归，不是实证的 Tern 晚到 pane 缺陷。
+
+完整场景还覆盖目录／类型／tab隔离、固定归属、工具内部当前目录继承、跨tab找回、单键并发、防止重置cwd、source关闭不park、原tab消失后的恢复及冲突取消、明确失败释放、候选关闭后定时观察释放、默认右侧／`br`布局与无关分屏保持。
+
+### 证据与限制
+
+- 结果与最终代码指纹：`/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/kiku-code-proof-2n9p5j3f/`，包含 `validation_summary.json`、各命令结果、`existing_helpers_result.json`、`tool_smoke.json` 和 `metadata.json`。临时执行脚本已删除，保留证据 JSON。
+- `tests/tools.py`、`tests/lazygit.py` 已同步新契约，并保留真实 PID、cwd、lazygit TUI／Git bridge、Restart、重载及普通 pane 不可认领的原生断言。静态审查发现的缺失导入、非 ASCII 路径转义、过期 pane 快照及 reveal 参数已修正。
+- 用户选择代码验证后，没有启动真实 Tern GUI／serve／daemon，也没有运行原生套件、浏览器自动化或 Linux 验收。此前官方 PiP 的隔离调查见设计文档，只证明旧版宿主能力。
+- 真实布局、焦点、shell 握手、进程采样时序和原生关闭／Restart仍待后续实机验收；代码边界替身不能代替这些证据。SDK进程采样也不构成原子OS身份保证。
+- 用户配置与既有 worktree 运行代码未改；未提交、未推送。
+
+## OMP／Git 等 block 来源修复（2026-10-22，仅代码级验证）
+
+用户报告激活 OMP 或 Git 等 block 时两类工具均拒绝，截图为“无法确定本机终端来源及其工作目录”。根因是 `ownerFor` 将**来源**也限制为 `terminal`，即使有有效目录仍提前拒绝。
+
+- 去除来源 kind 门禁，继续要求可靠绝对 `PaneInfo.cwd`、本机及有效标签页；缺失目录不将 file/root `path` 或 tab cwd 猜作兜底。
+- `liveTool`、`managedNow` 与身份模块仍只管理已验证的 terminal 工具；来源 block 不会变为受管工具。固定归属键、single-flight、联合进程采样及异步上下文复核未变。
+- 新增来源回归先红后绿：修复前 agent 来源实际创建 0 个工具，预期 1，断言 `0 != 1`；修复后从 agent／Git 启动、交叉复用及 Git 来源 park／restore 通过。其余新增场景覆盖空／缺失 cwd 即使有 path 仍拒绝、非本机拒绝、原生来源异步变更 cwd 时中止并允许重新发起。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| `python3 tests/code_validation.py --luau <官方 Luau 0.743>` | 30 个场景、151 条断言通过 |
+| 生产公开命令的 SDK 边界烟测 | agent／Git 目录正确；同一 scratch 被复用及恢复；普通 Git block 上管理动作保留两个工具；未向 agent／Git 来源注入命令 |
+| Luau 编译 | window、lib、helper、fixture 和场景脚本通过 |
+| Luau 静态分析 | 0 错误；保留 `tool_identity.luau:25` 的 1 条原有 `TableOperations` 告警，同一文件以两个路径显示 |
+| Python 语法 | 修改后的代码验证 runner 通过 |
+
+只读审查未发现本轮可行动缺陷。证据与最终执行代码指纹：`/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/kiku-block-source-proof-ps4xv8yk/`，包含 `validation_summary.json`、分项命令结果、`public_command_smoke.json` 和 `metadata.json`；临时烟测执行脚本已删除。
+
+继续遵循用户选择：未启动 Tern GUI／serve／daemon，未运行原生或浏览器测试，没有重载用户插件。SDK 边界替身不证明真实 block 的 cwd 报告、原生布局、焦点或进程时序；旧版真机证据也不作为本轮新版验收。用户配置及其他 worktree 行为未改，未提交、未推送。
+
+## 工具终端静默启动（2026-10-22，代码级 + 一次获准的隔离原生验证）
+
+用户截图确认旧实现把 `/bin/sh -c 'printf "KIKU_TOOL_V1:…" "$PPID"'` 及标记输出留在新终端里。根因是 `cx:run` 的公开语义就是“像键入一样”写入 PTY，身份采集只能移到进程启动阶段。
+
+### 修复
+
+- `lib/tool_identity.luau`：新增 `launch(token, cwd)` 与 `spawn(spec)`。前者为每次启动创建 `<plugin data>/tool-start/<标记>/request.json`；后者在宿主 `spawn` 钩子中只认这个私有目录，把 `cwd` 还原为真实目录，并用一次性初始 shell 在 `exec` 原 `program`／`args` 前静默写入 `$$`。删除旧的 `command` 输出与 `cx:run` 注入。
+- `host.luau` + `plugin.toml`：注册宿主半部。非本插件启动的 pane 原样返回；插件块不经过该钩子。
+- `lib/tools.luau`：创建时以私有启动目录作为 `split` 的 `cwd`；等待 prompt 后从 `pid` 文件取身份，不再检查或输入终端内容；创建失败或异常路径删除该标记目录。`liveTool`／`managedNow`／身份核验链保持 terminal-only 与进程代次检查。
+- 默认 shell 不受支持时写 `error` 并以 125 退出，窗口显示原因；不降级成无身份工具。
+
+### 隔离原生验证（zsh，真实 Tern 0.9.5）
+
+使用私有 `TERN_CONFIG_DIR`、私有 daemon、独立控制 socket 与临时目录，链接本工作区的插件副本；未连接或重载用户日常 Tern。
+
+| 观察 | 实际结果 |
+| --- | --- |
+| 工具窗格 | `kind = terminal`、`program = zsh`、`floating = true`、到达真实 prompt |
+| 启动目录 | 等于来源目录 |
+| 回滚内容 | 只有提示行；无 `KIKU_TOOL`，也无 `/bin/sh -c` 握手 |
+| 进程身份 | `tool-start/<标记>/pid` 的 PID 为存活 zsh，父进程是本次私有 daemon |
+| 收起／恢复 | `q` 后 `parked = true`；恢复后同一 pane 回到浮动、聚焦，输出仍无握手 |
+| 结束 | 确认后 pane 关闭，该标记的 `tools/<标记>.json` 与 `tool-start/<标记>/` 一并删除 |
+
+进程身份取自 `ps -p <pid> -o pid=,ppid=,comm=`：`comm = /bin/zsh`，父进程 PID 等于本次私有 daemon（`pid_is_daemon_child = true`），不是滚动区文本推断。
+
+跨 `reload_plugins` 之前创建的工具，其记录与启动目录按安全模式保留、不自动认领；本轮用插件自身的结束动作验证清理，未把重载前的旧实例算作清理失败。
+
+### 代码级与真实 shell 验证
+
+| 检查 | 实际结果 |
+| --- | --- |
+| `python3 tests/code_validation.py --luau <Luau 0.743>` | 32 个场景、165 条断言通过；新增“静默记录身份且不键入任何内容”和“默认 shell 不支持时不接管” |
+| `python3 tests/startup_code.py <luau>` | 用生产过滤器生成的真实命令行在 zsh、bash、sh、dash、ksh 中静默退出码 0、无 stdout/stderr、PID 与最终 shell 一致、原参数原样传递；重跑同一规格不覆盖首代次 PID。fish 未安装，未验证 |
+| Luau 编译 | `window.luau`、`host.luau`、lib、fixture 与场景脚本通过 |
+| Luau 静态分析 | 0 错误；仅剩 `tool_identity.luau` 那条原有 `TableOperations` 告警 |
+| Python 语法 | `code_validation.py`、`startup_code.py`、`tools.py` 通过 |
+
+`tests/tools.py` 的原生契约已同步：工具到达 prompt 后在清屏前断言回滚区没有内部标记或握手；旧“回滚区标记认领”探针改用私有记录中的标记，仍验证普通 pane 打印同样文本不能被采纳。
+
+### 证据与限制
+
+- 证据目录：`/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/kiku-quiet-start-proof-4db6z39a/`：`native_spawn_probe.json`（钩子收到的启动规格）、`native_exec_probe.json`（早期裸执行探针）、`native_red_before.json`（修复前可见标记）、`native_silent_tool_verification.json`（工具 pane、回滚区、pid 与 `ps` 父子关系）、`native_silent_tool_lifecycle.json`（收起／恢复／结束与清理）、`startup_code.json`、`final_summary.json`、`metadata.json`（文件指纹）。隔离原生实例与私有 daemon 均已关闭，临时目录未清理以供复核。
+- 修复前同一驱动在真实插件上读到可见 `KIKU_TOOL_V1` 已完成命令；修复后同一路径无该内容。
+- 本机默认 shell 为 zsh，原生只验证 zsh。bash／fish 的 Tern 集成参数是在钩子前后由宿主添加，其顺序公开资料未说明；bash 的 `--posix` 与 `ENV` 由 bootstrap 依据钩子可见环境补齐，属于代码级验证，未做原生确认；fish 无安装，完全未验证。
+- 宿主半部是该机制的前提；缺失时工具身份无法确认，插件安全拒绝而不是无身份启动。SDK 进程采样仍不是原子 OS 身份操作。
+- 未提交、未推送；用户配置与其他 worktree 行为未改。
+
+## 依赖解析回退登录 PATH（2026-10-22）
+
+用户截图报告打开 lazygit 提示“executables.lazygit 与本机 PATH 均不可用”。本机 lazygit 只存在于 `/opt/homebrew/bin/lazygit`，而依赖探测读取的是宿主进程 `PATH`；Finder／daemon 启动的 Tern 不继承 shell 配置里的 Homebrew 目录，`/usr/bin/git` 仍存在，因此只有 lazygit 被判缺失。
+
+### 修复
+
+- `lib/executables.luau`：解析顺序仍为显式 `executables.<name>` → 进程 `PATH`；仍未命中时用本机登录 shell 执行一次 `printf` 读取用户 `PATH`（`$SHELL -l -c`，缺失或非绝对路径时按平台取 `/bin/zsh`／`/bin/sh`），只重试缺失项并按插件 VM 缓存。
+- 回退成功时启动环境使用“登录 PATH + 进程 PATH”（登录目录在前），显式配置与显式路径的优先／回退提示不变；登录 shell 不可用或输出异常时沿用原缺失提示。缺失的 `executables` 配置项按空处理。
+
+### 验证
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 最小 PATH 的真实 Tern（隔离实例） | 私有 daemon 以 `PATH=/usr/bin:/bin:/usr/sbin:/sbin` 启动：`command -v lazygit` 为空，登录 shell 解析到 `/opt/homebrew/bin/lazygit`；插件成功打开 lazygit，pane 运行 `exec /usr/bin/env PATH='<私有 git 目录>:<登录 PATH>:<进程 PATH>' /opt/homebrew/bin/lazygit`，无错误提示 |
+| 代码级场景 | 34 场景、177 断言通过；新增“进程 PATH 缺失、登录 PATH 命中时使用登录目录并只探测一次”和“两处都缺失仍报错” |
+| 编译／分析／Python 语法 | 通过；仅剩 `tool_identity.luau` 那条原有告警 |
+
+证据：`/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/kiku-quiet-start-proof-4db6z39a/native_lazygit_login_path.json`、`final_summary_with_login_path.json`。隔离实例已关闭，未连接或重载用户日常 Tern；未提交、未推送。
+
+## PiP glance 下临时终端快捷键失效（2026-10-22）
+
+用户截图报告：打开的临时终端浮层停留一段时间后，`Ctrl+B → q` 与 `Ctrl+B → Shift+Q` 失效，报“工具身份未确认／未识别当前窗格：未执行结束操作”。
+
+### 根因
+
+隔离原生实例（私有配置、daemon、控制 socket 与临时目录）复现了同一状态：pane 仍存活、身份记录仍在、进程代次未变，变化的是焦点。
+
+- 工具刚打开时 PiP 为 `mode = focus`，`cx.session:focused()` 即工具 pane。
+- 窗口失焦或点击底层 pane 后，Tern 把同一 PiP 降为 `mode = glance`（缩小、倾斜），并把聚焦交回 owner pane。
+- 旧实现只按 `byPane[cx.session:focused()]` 取 leader 目标，因此 glance 状态下必然查不到工具，直接命中“未识别当前窗格”的拒绝分支。
+
+原生观测（修复前，`/private/tmp/kiku-glance-c1mvlm8s/evidence.json`）：`mode` 由 `focus` 变 `glance`、`focused` 回到 `4294967300`；随后 `Ctrl+B q` 出现 error toast（`role=alert`、`class` 含 `toast err`），`parked = false`，pane 仍在。
+
+### 修复
+
+`lib/tools.luau` 新增 `leaderTool(cx)`：
+
+1. 先按聚焦 pane 命中（原有行为不变）。
+2. 未命中时，在当前 host／session 内枚举本插件登记、且 `floating`、`tab` 等于当前标签页、未 `parked`、未 `exited` 的临时终端。
+3. 唯一候选作为 `q`／`Shift+Q` 的目标；多个候选不猜测，提示先点击目标浮层；零候选或聚焦 pane 无 tab 时保留原拒绝提示。
+
+身份校验、`park` 保活、`Shift+Q` 二次确认、异步上下文核对均未放宽。
+
+### 验证
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 原生修复前（红） | glance 后 `Ctrl+B q` 出现 error toast，`parked = false`；随后 `restore_tools` 无 picker（从未停放） |
+| 原生修复后（绿） | glance 后 `Ctrl+B q` 无 error toast 且 `parked = true`；`restore_tools` 恢复 `floating = true` 并聚焦；再次 glance 后 `Ctrl+B Shift+Q` 弹出“取消／结束此临时终端”确认，选结束后 pane 消失 |
+| 代码级场景 | 37 场景、193 断言通过；新增 `glance_pip_keeps_leader_actions`、`glance_ambiguous_pip_refuses_to_guess`、`glance_other_tab_keeps_pip`（先红后绿已核对） |
+| 原生工具套件 | 11 组 PASS，含 hide／restore、确认结束、来源关闭与跨 tab 恢复，无回归 |
+
+证据：`/private/tmp/kiku-glance-c1mvlm8s/`（修复前）、`/private/tmp/kiku-glance-p7uqn50b/`、`/private/tmp/kiku-glance-w9656_5y/`（修复后，含 `evidence.json`）、`/private/tmp/kiku-stale-sp231thk/evidence.json`（空闲 40 秒后自动掉为 glance 的时间线）。隔离实例与私有 daemon 均已关闭，未连接或重载用户日常 Tern；未提交、未推送。
+
+## 创建即浮动：工具不再先以分屏出现（2026-10-22）
+
+用户询问“打开临时终端是否必须先开一个 panel 再转成 PiP”。核查后的结论是：Tern 0.9.5 没有“直接创建终端 PiP”的入口，`Launch` 只有 `cwd`／`command`／`block`／`args`，`LayoutCx` 只提供 `new_tab`／`split` 创建 pane，`float(pane, over, corner)` 仅转换已有 pane；内置命令只有 `new_browser_pip` 能从零创建 PiP，终端只有 `pip`（弹出聚焦的 split pane）。因此保留“先 split 再 float”，但把 `float` 提前到身份握手之前。
+
+### 修复
+
+`lib/tools.luau` 的 `create()` 在 `split` 成功后立即 `cx.layout:float(pane, owner.anchor, "br", { focus = false })`：
+
+- 焦点保持在来源 pane，因为 `handshake`／`requestValid` 全程要求 `cx.session:focused() == request.pane`；
+- 失败时提示“工具已创建但未能浮动”，继续握手，`presentTool` 会再次尝试；
+- 握手完成后 `displayTool` 仍按原逻辑 `float` 并显式 `focus`，重复 `float` 已验证为幂等。
+
+### 验证
+
+| 检查 | 实际结果 |
+| --- | --- |
+| SDK 语义探针（隔离 GUI，私有窗口） | `split` 后立即 `float(source, "br", { focus = false })` 返回 `ok = true`，PiP 出现且 `mode = glance`，`focused` 仍为来源 pane；再次 `float(..., { focus = true })` 不产生重复 PiP，也不改变焦点；显式 `cx.layout:focus(pane)` 后 `mode = focus` |
+| 暴露时间线对照（~40 ms 采样 + Carly 触发） | 修复前：9 个“仅分屏、无 PiP”采样，跨度 316 ms，首个 PiP 在 358 ms 后出现；修复后：0 个该采样，PiP 直接出现（先 `glance`，握手后 `focus`） |
+| 真实插件端到端（隔离 GUI） | 打开工具后 `pips` 立即出现，最终 `pips[0].mode = focus`、`focused` 等于工具 pane、`panes` 保持 2 |
+| 代码级场景 | 38 场景、204 断言通过；新增 `creation_floats_before_identity_handshake`（创建阶段 `floating` 已为真、`focused` 仍是来源、记录未验证，flush 后 PiP 保持且取得焦点） |
+
+限制：`tests/integration.py --tools-only` 在本机未能完成，首次创建时 Tern 禁用插件 `process` hook（`plugin hook exceeded its budget`／`tern: process exceeded 50 ms`），随后不再执行插件命令。临时移除本次改动后运行同一场景得到相同的超时与空 `pips`，确认该阻塞与本次改动无关，属于既有的宿主预算问题；原生结论以上述隔离 GUI 探针与代码级场景为准。
+
+证据：`/tmp/pip_probe_observations.json`（SDK 语义）、`/tmp/kiku_exposure_red.json` 与 `/tmp/kiku_exposure_green.json`（暴露时间线）、`/tmp/kiku_float_probe.json`（真实插件端到端）。隔离实例与私有 daemon 均已关闭，未连接或重载用户日常 Tern；未提交、未推送。
+
+## 工具统一浮动与激活描边（2026-10-22）
+
+用户要求 lazygit 与临时终端使用同一套 PiP 交互，并为主题色激活 block 增加圆角描边、去掉原有顶部渐变线；随后补充希望 PiP 自动最大化。
+
+### 实现
+
+- `lib/tools.luau`：`displayTool` 对两种工具都调用 `float(pane, target, "br", { focus = true })`，不再为 lazygit 走 `dock`／`move`。`hide`、`endTool`、`restore` 去掉 terminal-only 限制，共用 single-flight、身份核验、park／unpark 和冲突处理路径；恢复列表按工具类型显示 lazygit 或终端，结束确认区分两者。
+- 创建阶段仍先 `split` 再立即 `float`（`focus = false`），握手完成后再次浮动并聚焦；lazygit 的 Git bridge、进程身份和原生退出清理未改。
+- `lib/style.luau` + `window.luau`：插件加载时注册全局样式 `plugin:local:kiku:active-block`。激活 block 使用 `--accent` 色的 2px 圆角描边和轻微内发光，隐藏 Tern 原顶部 1px 渐变线；float／studio 布局按 4px 内边距对齐卡片；PiP 聚焦时也绘制主题色描边。
+- lazygit 仓库预检：依赖检查通过后，用已解析的 Git 执行 `-C <启动目录> rev-parse --is-inside-work-tree`；非仓库、超时或来源变化时不创建 pane、不启动 lazygit，只显示错误提示。临时终端仍可用于非 Git 目录。
+- PiP 尺寸：Tern 0.9.5 窗口插件 API 没有 `expand`／`resize`，`pip expand` 只存在于场景脚本，`cx:action`／`cx.actions:run` 均返回 unknown action；因此插件只能以 `focus` 模式打开（原生最大标准尺寸），没有用固定视口尺寸的 CSS 覆盖伪造最大化。
+
+### 验证
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 原生 lazygit 套件 `python3 tests/integration.py --lazygit-only` | 9 组 PASS：真实 lazygit 以浮动、聚焦的 PiP 打开；同源复用／跨 tab 带回；与临时终端共存；第二个 tab 独立实例；配置路径回退；非 Git 来源拒绝且临时终端仍可打开；失败卡片；重载不接管；可执行文件移除后 q 停放、再次打开恢复、Shift+Q 弹确认并取消、原生关闭清理进程与 bridge |
+| 隔离原生 GUI（私有 config／daemon／socket） | `tern ctl css` 列出 `plugin:local:kiku:active-block`，5 条规则；light 与 dark 主题截图均显示圆角主题色描边，原顶部渐变线不再出现 |
+| 原生非 Git 来源 `python3 tests/integration.py --lazygit-non-git-only` | PASS：lazygit 拒绝创建 pane、未启动真实 lazygit、未初始化仓库；同一目录的临时终端仍正常打开 |
+| 代码级 | 40 场景、221 条断言通过（`tests/code_validation.py --luau`），含非 Git 拒绝与仓库检查期间来源变化中止 |
+| Luau 编译／静态分析 | 通过；仅保留 `tool_identity.luau:100` 的原有 `TableOperations` 告警和 `window.luau` 一条既有 `MultiLineStatement` 提示 |
+| Python 语法 | `tests/*.py` 通过 |
+
+证据：
+
+- 原生 lazygit：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-w8g__4kx`、`.../tern-kiku-test-e32mge4n`，含 `lazygit-real-tui.png`、非 Git 拒绝、重载与清理截图。
+- 原生非 Git 拒绝：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-wo50aoix`（`lazygit-non-git-refusal.png`、`last-state.json`）与 `/tmp/kiku-native-nongit-toast2-tinh23hq/target/shots/tern/live/non-git-toast2.png`；真实提示为“无法打开 lazygit / 当前目录不是 Git 仓库：<完整路径>”，未创建 pane。
+- 原生描边：`/tmp/kiku-native-outline-tm9g02v8/target/shots/tern/live/outline-native.png`、`/tmp/kiku-native-outline2-uv4s62c3/target/shots/tern/live/outline-native-dark.png`。
+- 无头 CSS 选择器探针：light／tiles、light／float 截图，以及 `tern ctl css` 规则加载结果；用于验证圆角、顶部线移除和主题变量解析。临时无头实例均已 `quit`。
+
+限制：自动展开 PiP 需要 Tern 上游提供窗口 API；当前只保证打开即 `focus`。未提交、未推送，未修改用户日常 Tern 配置或会话。
