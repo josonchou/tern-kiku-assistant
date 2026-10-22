@@ -434,3 +434,32 @@ lazygit 的真实 `--version` 探测也会调用 Git，不能把第一条 Git �
 - 无头 CSS 选择器探针：light／tiles、light／float 截图，以及 `tern ctl css` 规则加载结果；用于验证圆角、顶部线移除和主题变量解析。临时无头实例均已 `quit`。
 
 限制：自动展开 PiP 需要 Tern 上游提供窗口 API；当前只保证打开即 `focus`。未提交、未推送，未修改用户日常 Tern 配置或会话。
+
+## 自身仓库 Git 元数据触发插件热重载（2026-10-22）
+
+用户报告 lazygit 打开后不自动聚焦，`Ctrl+B → q / Shift+Q` 显示“工具身份未确认／未识别当前窗格”。真实隔离复现确定原因不是快捷键或进程验证失败：开发链接指向包含 `.git` 的仓库根目录，lazygit 的 Git 元数据刷新触发 Tern 0.9.5（2863c37）重载插件 VM，清空运行期工具登记并中断启动后的聚焦。
+
+按用户选择保留源码热加载，不改为独立安装副本：13 个运行源码／配置文件整体移入 `plugin/`，与迁移前逐字节一致；实际开发链接更新为仓库的 `plugin/` 子目录。测试与文档保持在仓库根目录，运行包内相对导入不变，用户配置不丢失。源码热加载仍会遵守原有安全模式，不自动认领或关闭重载前旧工具。
+
+### 已执行验证
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 原生红：包根等于 Git 根 | lazygit 创建期间 VM 代次从 1 变为 2；5 秒采样始终为 glance，未自动聚焦；q 未停放，Shift+Q 无结束确认 |
+| 原生重载因果对照 | 仅在已链接包内 `.git` 新增文件，VM 代次从 2 变为 3；改从独立仓库打开 lazygit，代次保持 2，能够自动聚焦 |
+| 原生绿：源码包位于 Git 根下的 `plugin/` | VM 代次保持 1；约 1397 ms 采样到 PiP focus；q 停放、同 pane 恢复并聚焦、Shift+Q 确认及取消均通过 |
+| 新增源码文件与包外 Git 变化 | 在 `plugin/lib/` 新增模块后 VM 从 1 变为 2，证明新增文件仍热加载；随后仅修改包外 `.git`，VM 保持 2 |
+| 生产文件与配置迁移 | 13 个包文件与 HEAD 中旧路径逐字节一致；旧根入口、配置和 `lib/` 副本不存在 |
+| 代码级工具场景 | `python3 tests/code_validation.py --luau /tmp/luau743/luau` 的 40 个场景全部通过 |
+| 真实 lazygit 完整原生回归 | `python3 tests/integration.py --lazygit-only` 最终 10 组 PASS（独立 Restart 组 + 9 组主套件），包括新增的包含插件包的仓库 Git 元数据更新后自动聚焦、q 保活、同 pane／PID 恢复、Shift+Q 取消与确认退出；跨重载不认领、缺失依赖管理等原有场景保持通过 |
+| 工作树完整回归 | `python3 tests/integration.py` 83 组 PASS，包含包外 `tests/helpers.luau` 装载、创建／管理／安全关闭及正常／危险移除；包目录迁移未破坏既有工作树流程 |
+| 静默 shell 启动 | `tests/startup_code.py` 在 zsh、bash、sh、dash、ksh 上通过首代次 PID 与重启验证；fish 未安装，未验证 |
+| 编译与语法 | `luau-compile --null plugin/window.luau plugin/host.luau plugin/lib/*.luau` 通过；改动 Python 脚本的语法编译通过 |
+
+首次原生检查在前置 Restart 场景发现测试新增导入时误删了既有 `signal` 导入；恢复后完整重跑通过，没有跳过或弱化该场景。最终原生证据目录：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-61q6dhx2`（Restart）和 `.../tern-kiku-test-hb28d08c`（主套件）。
+工作树完整回归证据目录：`/private/var/folders/wh/t3q86s6918nfqd3r15m8_f6w0000gq/T/tern-kiku-test-hfcuaj3n`，报告包含 `count = 83`。
+
+红绿探针结构化结果：`local://tern-plugin-watch-boundary-evidence.json`。探针仅使用私有配置、daemon、GUI 和 socket；相关临时实例已关闭。日常环境只更新插件源码链接，没有执行关闭、重开或重新认领旧工具的动作。
+
+本次不改变 lazygit 的启动命令／PATH 语义，不修改快捷键配置，不放宽身份核验。未提交、未推送。
+

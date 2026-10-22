@@ -72,10 +72,10 @@ def main():
             )
         return
     files = {
-        "tools": "lib/tools.luau",
-        "identity": "lib/tool_identity.luau",
-        "launch": "lib/lazygit_launch.luau",
-        "executables": "lib/executables.luau",
+        "tools": "plugin/lib/tools.luau",
+        "identity": "plugin/lib/tool_identity.luau",
+        "launch": "plugin/lib/lazygit_launch.luau",
+        "executables": "plugin/lib/executables.luau",
         "tests": "tests/tool_code.luau",
         "fixture": "tests/code_fixture.luau",
     }

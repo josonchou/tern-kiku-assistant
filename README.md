@@ -9,10 +9,10 @@ Kiku 助手在 Tern 中创建、发现和管理 Git 工作树，并安全关闭�
 需要支持 `cx:pick` / `cx:prompt` 的 Tern。工作树创建、打开和管理需要本机 Git；正常及危险移除另需本机 `realpath`。lazygit 仅供 lazygit 工具使用，缺失时不影响工作树操作或临时终端；lazygit 启动环境还须能使用 Git。依赖按功能独立门控，不自动安装程序。Git、lazygit 和 realpath 均可在插件配置中指定单个可执行文件路径；配置路径不可用时会回退本机 `PATH`，两者均不可用才停用相应功能。Tern 由 Finder／daemon 启动时继承的 `PATH` 可能不含用户 shell 配置里的目录（例如 Homebrew）；此时插件会用本机登录 shell 读取一次用户 `PATH` 再解析，结果按本次插件运行缓存。显式配置始终优先。临时终端使用 Tern 默认 shell，不另设 shell 配置。
 
 ```bash
-tern plugin link ~/Workspace/tern-kiku-assistant
+tern plugin link ~/Workspace/tern-kiku-assistant/plugin
 ```
 
-这是本地开发目录示例，请替换为实际插件目录；它不代表已发布的下载地址。链接后可在 Tern 命令面板运行 **Reload plugins**。使用 `tern plugin list` 查看插件状态。
+这是本地开发目录示例，请替换为实际仓库下的 `plugin/` 包目录；它不代表已发布的下载地址。不要链接包含 `.git` 的仓库根目录：Tern 会监听包目录的变化，lazygit 刷新 Git 元数据也可能触发插件重载，使已有工具失去本次运行期登记。源码仍直接热加载，新增运行文件放在 `plugin/` 下即可；仓库根目录的 Git 元数据、测试和文档不属于插件监听范围。链接后可在 Tern 命令面板运行 **Reload plugins**，使用 `tern plugin list` 查看状态。
 
 ## 快捷工具
 
@@ -134,7 +134,7 @@ tern plugin link ~/Workspace/tern-kiku-assistant
 
 ## 配置
 
-编辑插件目录的 `config.json`：
+编辑插件包目录的 `config.json`；从源码链接安装时，对应仓库内的 `plugin/config.json`：
 
 ```json
 {
@@ -172,7 +172,7 @@ tern plugin link ~/Workspace/tern-kiku-assistant
 
 ```bash
 # 为编辑器生成与本机 Tern 匹配的声明文件（已 gitignore）
-tern plugin types .
+tern plugin types plugin
 
 # 不启动 Tern 的隔离逻辑验证（先自行提供 Luau CLI 路径）
 python3 tests/code_validation.py --luau /path/to/luau
@@ -193,28 +193,29 @@ python3 tests/integration.py --lazygit-missing-lazygit-only
 
 测试使用独立 Tern 配置、测试插件副本和临时 Git 仓库，不修改日常 Tern 配置。快捷工具使用正常 GUI 与私有 daemon；macOS 验收期间需保持本机桌面解锁。lazygit 的真实 wrapper 显式使用私有配置目录，不能只依赖宿主环境变量隔离其配置。测试结束会关闭实例；报告、截图和日志保留在打印出的临时目录。Linux 需要可运行 Tern 的图形环境，尚未实测。
 
-本轮布局与复用改造按用户决定仅执行代码验证：生产 Luau 命令／事件逻辑运行于隔离的 Tern SDK 边界替身；静态编译、逻辑结果及限制见 [验证记录](docs/verification.md)。上面的原生测试契约已同步，但本轮未执行。代码验证不能证明真实 Tern 的布局、焦点、shell 握手及生命周期时序。
+代码级验证在隔离的 Tern SDK 边界替身中执行生产 Luau 命令／事件逻辑，不能证明真实 Tern 的布局、焦点、shell 握手及生命周期时序；实际执行的代码级与原生检查及其限制见 [验证记录](docs/verification.md)。
 
 目录结构：
 
 ```text
-plugin.toml          # 插件清单（窗口与宿主入口）
-window.luau          # 原生创建／管理流程、异步 Git 操作及工作树标签页绑定
-host.luau            # 宿主 spawn 钩子：仅处理本插件私有启动目录，静默记录工具 shell 身份
-lib/config.luau      # 配置字段与默认值
-lib/executables.luau # 本机外部程序解析、探测和功能门控
-lib/tools.luau       # 固定 tab/启动目录实例、两类工具 PiP/停放管理
-lib/tool_identity.luau # 本次运行期的进程启动身份验证与私有启动交接目录
-lib/lazygit_launch.luau # 私有 Git 执行桥与 lazygit 启动环境
-lib/style.luau       # 主题色激活 block 描边 CSS
-lib/worktree.luau    # Git porcelain 解析、路径和创建参数
-lib/manager.luau     # 本机跨会话 pane 与工作树身份匹配
-lib/removal.luau     # 共用的安全移除审查与路径边界检查
-config.json          # 用户可编辑配置
-tests/               # SDK 边界逻辑验证、Luau 断言与真实 Tern/Git 集成测试
-GLOSSARY.md          # 已确认的领域术语
-docs/design.md       # 已确认的设计
-docs/verification.md # 验证记录
+plugin/                # 运行包与源码热加载边界，不包含仓库根目录的 .git
+  plugin.toml          # 插件清单（窗口与宿主入口）
+  window.luau          # 原生创建／管理流程、异步 Git 操作及工作树标签页绑定
+  host.luau            # 宿主 spawn 钩子：静默记录工具 shell 身份
+  lib/config.luau      # 配置字段与默认值
+  lib/executables.luau # 本机外部程序解析、探测和功能门控
+  lib/tools.luau       # 固定 tab/启动目录实例、两类工具 PiP/停放管理
+  lib/tool_identity.luau # 本次运行期的进程身份验证与私有启动交接目录
+  lib/lazygit_launch.luau # 私有 Git 执行桥与 lazygit 启动环境
+  lib/style.luau       # 主题色激活 block 描边 CSS
+  lib/worktree.luau    # Git porcelain 解析、路径和创建参数
+  lib/manager.luau     # 本机跨会话 pane 与工作树身份匹配
+  lib/removal.luau     # 共用的安全移除审查与路径边界检查
+  config.json          # 用户可编辑配置
+tests/                 # SDK 边界逻辑验证、Luau 断言与真实 Tern/Git 集成测试
+GLOSSARY.md            # 已确认的领域术语
+docs/design.md         # 已确认的设计
+docs/verification.md   # 验证记录
 ```
 
 卸载链接，不删除项目文件：

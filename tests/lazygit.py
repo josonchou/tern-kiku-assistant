@@ -3,6 +3,7 @@
 
 import json
 import os
+import shutil
 import signal
 import stat
 from pathlib import Path
@@ -66,6 +67,82 @@ def open_real_lazygit(h):
 
     h.wait_for(real_ui, "shortcut opens the real lazygit repository UI")
     return opened
+
+def run_containing_repository(h, keybinding, lazygit_log):
+    outer_readme = h.root / "README.md"
+    outer_git = h.root / ".git"
+    assert not outer_readme.exists() and not outer_git.exists()
+    outer_readme.write_text("outer repository\n")
+    h.git("init", "-b", "main", cwd=h.root)
+    h.git("config", "user.name", "Kiku Test", cwd=h.root)
+    h.git("config", "user.email", "kiku@example.invalid", cwd=h.root)
+    h.git("add", "README.md", cwd=h.root)
+    h.git("commit", "-qm", "fixture", cwd=h.root)
+    outer_readme.write_text("outer repository uncommitted\n")
+    h.open_repo(h.root)
+    source = h.lua_json('cx.session:pane("@focused")')
+    before = {pane["pane"] for pane in h.lua_json("cx.session:panes()")}
+    launch_count = len(lazygit_launches(lazygit_log))
+    for chord in keybinding.split(">"):
+        h.ctl("key " + chord)
+    opened = {}
+
+    def focused_tool(state):
+        focused = (state.get("focused") or {}).get("id")
+        for pip in state.get("pips", []):
+            if pip["id"] not in before and pip["id"] == focused and pip["mode"] == "focus":
+                opened["pane"] = pip["id"]
+                return True
+        return False
+
+    h.wait_for(focused_tool, "containing-repository lazygit opens with automatic PiP focus")
+    launches = lazygit_launches(lazygit_log)[launch_count:]
+    assert len(launches) == 1, launches
+    pane_id, pid = opened["pane"], launches[0][1]
+    assert process_alive(pid)
+    h.git("config", "kiku.reloadProbe", "metadata-updated", cwd=h.root)
+    h.ctl("key ctrl+b")
+    h.ctl("key q")
+    h.wait_for(
+        lambda state: any(card["pane"] == pane_id for card in state["park"]["cards"]),
+        "containing-repository Git metadata update preserves managed lazygit hide",
+    )
+    assert process_alive(pid)
+    h.lua(f"cx.layout:focus({source['pane']}); return true")
+    for chord in keybinding.split(">"):
+        h.ctl("key " + chord)
+    h.wait_for(
+        lambda state: (state.get("focused") or {}).get("id") == pane_id
+                      and any(pip["id"] == pane_id and pip["mode"] == "focus"
+                              for pip in state.get("pips", [])),
+        "containing-repository lazygit restores the same pane with automatic focus",
+    )
+    assert process_alive(pid)
+    assert len(lazygit_launches(lazygit_log)) == launch_count + 1
+    h.ctl("key ctrl+b")
+    h.ctl("key shift+q")
+    h.wait_for(lambda state: bool(state.get("picker")),
+               "containing-repository lazygit opens end confirmation")
+    h.ctl("picker esc")
+    h.wait_for(lambda state: not state.get("picker"),
+               "canceling containing-repository end confirmation keeps its tool")
+    assert process_alive(pid)
+    assert h.lua_json(f"cx.session:pane({pane_id})") is not None
+    h.ctl("key ctrl+b")
+    h.ctl("key shift+q")
+    h.wait_for(lambda state: bool(state.get("picker")),
+               "containing-repository lazygit end confirmation reopens")
+    h.ctl("picker down")
+    h.ctl("picker enter")
+    h.wait_for(lambda _: not process_alive(pid),
+               "confirming containing-repository lazygit end exits its process")
+    h.wait_for(lambda _: h.lua_json(f"cx.session:pane({pane_id})") is None,
+               "confirmed containing-repository lazygit end removes only its pane")
+    assert h.lua_json(f"cx.session:pane({source['pane']})") is not None
+    shutil.rmtree(outer_git)
+    outer_readme.unlink()
+    h.record("containing-repository Git metadata changes preserve lazygit focus, hide/restore, and confirmed end")
+
 
 def run(h):
     from management import _has_error_alert
@@ -376,6 +453,8 @@ def run(h):
     h.wait_for(lambda _: not failure_bridge.exists(),
                "confirmed native pane close cleans the ended lazygit bridge")
     h.record("real failure remains viewable and cannot be adopted as a terminal owner")
+
+    run_containing_repository(h, keybinding, lazygit_log)
 
     h.open_repo(h.repo)
     reload_source = h.lua_json('cx.session:pane("@focused")')

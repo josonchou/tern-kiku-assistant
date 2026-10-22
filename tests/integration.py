@@ -179,7 +179,7 @@ def main(dependencies_only=False, tools_only=False, restart_only=False,
     (REPO / "README.md").write_text("uncommitted\n")
     (REPO / ".env").write_text("TEST_FIXTURE=local-only\n")
     original_status = git("status", "--porcelain")
-    shutil.copytree(PROJECT, PLUGIN, ignore=shutil.ignore_patterns(".git", ".test-artifacts", "tern.d.luau"))
+    shutil.copytree(PROJECT / "plugin", PLUGIN)
     fixture = ROOT / "crates" / "plugins" / "fixtures"
     fixture.mkdir(parents=True)
     (ROOT / "crates" / "tern" / "goldens").mkdir(parents=True)
@@ -380,7 +380,7 @@ def main(dependencies_only=False, tools_only=False, restart_only=False,
         core = json.dumps(str(PLUGIN / "lib" / "worktree.luau"))
         manager_path = json.dumps(str(PLUGIN / "lib" / "manager.luau"))
         removal_path = json.dumps(str(PLUGIN / "lib" / "removal.luau"))
-        tests = json.dumps(str(PLUGIN / "tests" / "helpers.luau"))
+        tests = json.dumps(str(PROJECT / "tests" / "helpers.luau"))
         helper_code = (
             f'local m = loadstring(tern.fs.read({core}))()'
             f'; local manager = loadstring(tern.fs.read({manager_path}))()'
