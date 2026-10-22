@@ -463,3 +463,62 @@ lazygit 的真实 `--version` 探测也会调用 Git，不能把第一条 Git �
 
 本次不改变 lazygit 的启动命令／PATH 语义，不修改快捷键配置，不放宽身份核验。未提交、未推送。
 
+## 用户选择回迁至独立插件仓库根布局（2026-10-22）
+
+此前的 `plugin/` 子包方案已由用户明确取代：用户选择官方文档所列的“独立插件分发布局”，即仓库根目录本身就是插件包根。该选择不基于“SDK 只允许根目录”的错误前提；官方 `plugins/examples/jsonx`、`canvas`、`longrun` 实际位于 SDK 仓库子目录，两种组织方式都被官方支持。
+
+### 变更
+
+- 13 个运行源码与配置（`plugin.toml`、`window.luau`、`host.luau`、`config.json`、`lib/` 下 9 个模块）从 `plugin/` 移回仓库根，字节内容完全不变；`plugin/` 目录不再存在。用户配置（含 `manageKeybinding` 与 `executables.lazygit`）原样保留。
+- 实际开发链接由 `tern plugin link` 重新指向仓库根，`tern plugin list` 显示 `kiku 0.1.0 … window ready`。
+- `tests/integration.py` 复制来源恢复为仓库根（排除 `.git`、`.test-artifacts`、`tern.d.luau`、`__pycache__`），`helpers.luau` 从临时包副本的 `tests/` 读取；`tests/code_validation.py`、`tests/startup_code.py` 生产源码路径恢复为根 `lib/`。
+- README 的链接、`tern plugin types .`、配置位置与目录树同步为根布局；设计文档把子包方案标注为已被取代的历史决定。
+
+### 已执行验证
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 回迁内容一致性 | 回迁前后 13 个文件的 SHA-256 逐一相等；`plugin/` 残留目录不存在 |
+| 代码级工具场景 | 40 个场景全部通过 |
+| 静默 shell 启动 | zsh、bash、sh、dash、ksh 通过首代次 PID 与重启验证；fish 未安装，未验证 |
+| 编译与语法 | `luau-compile --null window.luau host.luau lib/*.luau` 通过；改动 Python 脚本语法编译通过 |
+| 真实 lazygit 原生回归 | `--lazygit-only` 10 组 PASS（Restart 组 + 9 组主套件），证据目录 `…/tern-kiku-test-jna8mo39`、`…/tern-kiku-test-67_putpv` |
+| 完整工作树回归 | `python3 tests/integration.py` 83 组 PASS，证据目录 `…/tern-kiku-test-68c6riod` |
+
+一次并行执行两个原生套件时，`window.luau` 的 `load` 钩子超过 50 ms 预算被 Tern 禁用，导致 action 缺失与 lazygit 打开超时；串行重跑全部通过，确认是并发负载而非布局回归。
+
+### 剩余风险（未解决）
+
+根布局使 `.git` 回到被监听目录内。此前隔离实验已证明：链接包内的 `.git` 元数据变化会重载插件。因此在**本仓库自身**打开 lazygit（lazygit 会刷新该仓库的 Git 状态）仍可能触发重载，清空运行期工具登记，表现为不自动聚焦、`q / Shift+Q` 报“未识别当前窗格”。本次回迁不声称消除该问题，也未放宽身份校验或重新认领旧实例。`tests/lazygit.py` 的“包含插件包的仓库”回归覆盖外层仓库的 Git 元数据，不等于根布局下本仓库自身的该场景。
+
+## `q` 触发 await 预算超限（2026-10-22）
+
+用户按 `Ctrl+B → q` 时窗口提示 “Plugin Kiku 助手: await failed / runtime error: tern: await exceeded 50 ms”。窗口日志确认 `plugin hook exceeded its budget; disabled until reload plugin="kiku" hook="await"`，即该 hook 被禁用直到重载，后续调用会被静默跳过。
+
+### 原因
+
+窗口侧每次调用预算 50 ms，且 await 沿用同一截止时间。工具窗格运行 lazygit 时没有 shell 的 OSC 133 提示符标记，`session:settle(pane, ms)` 只能等到超时才返回。原实现有三处此类长等待：
+
+| 位置 | 原等待 | 影响 |
+| --- | --- | --- |
+| `lib/tool_identity.luau` 新鲜采样 | `settle(pane, 100)` | 每次身份校验：`q`、`Shift+Q`、复用、打开 |
+| `lib/tools.luau` 启动握手 | `settle(pane, 100)` | 所有工具启动 |
+| `lib/tools.luau` lazygit 呈现前 | `settle(pane, 500)` | 打开 lazygit |
+
+因此只要进程采样未更新，`q` 必然超预算。
+
+### 修复
+
+改为每次 10 ms 的短结算切片轮询：`freshSample` 与启动握手各以 10 ms 切片推进，lazygit 呈现等待为 50 个 10 ms 切片。仍要求采样晚于校验开始，切片用尽或窗格消失时保守拒绝，不接管未知实例，不改变身份校验与安全模式。
+
+### 已执行验证
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 代码级工具场景 | 41 个场景通过，新增 `stale_process_sample_never_awaits_shell`：采样冻结时拒绝执行收起、窗格保留、单次等待不超过 10 ms；采样恢复后同一工具正常收起 |
+| 原生工具套件（GUI） | 11 组 PASS，`native-tern.log` 中 `exceeded 50 ms` 为 0 次 |
+| 真实 lazygit 原生回归 | 10 组 PASS（含 Restart 子场景、自仓库元数据、q 收起、Shift+Q 确认），证据目录 `…/tern-kiku-test-r9u8z1fw`、`…/tern-kiku-test-faz1knzk` |
+| 无头重启场景 | `--lazygit-restart-only` PASS，证据目录 `…/tern-kiku-test-hs_2zids` |
+
+限制：`--tool-restart-only` 在本机仍然因既有的 `process` 钩子超过 50 ms 而失败；用同一场景跑未修改的 `HEAD` 快照得到相同结果，属本机既有环境限制，与本次改动无关。另经隔离实验确认，无头 `serve` 只在窗口活动时才服务插件定时器，因此该修复没有采用定时器链。
+

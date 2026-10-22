@@ -11,6 +11,7 @@ local state = {
     env = { PATH = "/usr/bin:/bin", SHELL = "/bin/zsh" },
     loginPath = nil, loginProbes = 0,
     deferParentFind = false, parentCallbacks = {},
+    settleCalls = 0, frozenSample = nil, settleMaxMs = 0,
 }
 local cx = {}
 state.cx = cx
@@ -204,7 +205,11 @@ cx.session = {
     end,
     tabs = function() return state.tabs end,
     layout = function(_, tab) return state.layouts[tab] end,
-    settle = function() return promise("", nil) end,
+    settle = function(_, pane, ms)
+        state.settleCalls += 1
+        state.settleMaxMs = math.max(state.settleMaxMs, ms or 0)
+        return promise("", nil)
+    end,
 }
 cx.procs = {
     list = function(_, options)
@@ -215,7 +220,8 @@ cx.procs = {
         while #processes > (options.limit or total) do table.remove(processes) end
         local more = total - #processes
         if state.inventoryIncomplete and options.limit > 1 then more += 1 end
-        return promise({ sample = state.samples, ["local"] = true, more = more, processes = processes })
+        local sample = state.frozenSample or state.samples
+        return promise({ sample = sample, ["local"] = true, more = more, processes = processes })
     end,
     find = function(_, pid)
         if pid == 100 then

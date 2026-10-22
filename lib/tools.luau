@@ -173,10 +173,32 @@ finishStartup = function(tool)
     if tool.finish then tool.finish() end
 end
 
+-- A window call has a 50 ms budget, so the handshake must never await a long
+-- settle: while the tool's shell runs a full-screen program such as lazygit,
+-- settle() only returns at its deadline. Poll in short slices instead. The
+-- shell records its own PID in the private launch directory before exec, so
+-- nothing is typed into the pane.
+local HANDSHAKE_POLL_MS = 10
+
 local function handshake(cx, tool, remaining)
-    -- settle observes OSC 133 or its deadline. The shell records its own PID in
-    -- the private launch directory before exec, so nothing is typed into the pane.
-    cx.session:settle(tool.pane, 100):next(function(_, err, nextCx)
+    local check
+    local function wait(nextCx, left)
+        nextCx.session:settle(tool.pane, HANDSHAKE_POLL_MS):next(function(_, settleError, settleCx)
+            if not settleCx or settleError then finishStartup(tool); return end
+            check(settleCx, left)
+        end)
+    end
+    local function afterLaunch(nextCx, slices, done)
+        local function step(currentCx, left)
+            if not currentCx or left == 0 then done(currentCx); return end
+            currentCx.session:settle(tool.pane, HANDSHAKE_POLL_MS):next(function(_, settleError, settleCx)
+                if not settleCx or settleError then done(nil); return end
+                step(settleCx, left - 1)
+            end)
+        end
+        step(nextCx, slices)
+    end
+    check = function(nextCx, left)
         if not nextCx then finishStartup(tool); return end
         if tools[tool.key] ~= tool or byPane[tool.pane] ~= tool then
             finishStartup(tool)
@@ -188,13 +210,13 @@ local function handshake(cx, tool, remaining)
         end
         local pane = liveTool(nextCx, tool)
         if not pane then finishStartup(tool); return end
-        if err or pane.exited ~= nil or remaining == 0 then
+        if pane.exited ~= nil or left == 0 then
             finishStartup(tool)
             nextCx:toast("error", "工具身份未确认", "等待新 shell 或身份记录超时；窗格仍保留，不重复启动。")
             return
         end
         if pane.at_prompt ~= true or pane.busy == true or pane.running ~= nil then
-            handshake(nextCx, tool, remaining - 1)
+            wait(nextCx, left - 1)
             return
         end
         local marker, markerError = identity.marker(nextCx, tool.pane, tool.token)
@@ -204,7 +226,7 @@ local function handshake(cx, tool, remaining)
             return
         end
         if not marker or not marker.pid then
-            handshake(nextCx, tool, remaining - 1)
+            wait(nextCx, left - 1)
             return
         end
         identity.rememberProcess(nextCx, tool, marker.pid, tool.pane, function(ok, verifiedCx)
@@ -217,7 +239,7 @@ local function handshake(cx, tool, remaining)
                 return
             end
             if not ok then
-                handshake(verifiedCx, tool, remaining - 1)
+                wait(verifiedCx, left - 1)
                 return
             end
             tool.identityVerified = true
@@ -231,7 +253,7 @@ local function handshake(cx, tool, remaining)
                 local command = lazygitLaunch.command(
                     tool.programs.gitDirectory, tool.programs.lazygit, tool.programs.pathEnv)
                 verifiedCx:run(tool.pane, command .. "\r")
-                verifiedCx.session:settle(tool.pane, 500):next(function(_, launchError, finalCx)
+                afterLaunch(verifiedCx, 50, function(finalCx)
                     if not finalCx then if tool.finish then tool.finish() end; return end
                     local finalHost = finalCx.hosts:current()
                     local finalSession = finalCx.sessions:current()
@@ -267,7 +289,8 @@ local function handshake(cx, tool, remaining)
                 presentTool(verifiedCx, tool)
             end
         end)
-    end)
+    end
+    check(cx, remaining)
 end
 
 local function removeTool(tool, ended)

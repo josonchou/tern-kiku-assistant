@@ -154,6 +154,12 @@ function M.records()
     return records
 end
 
+-- A window call has a 50 ms budget, so waiting for a newer process sample must
+-- never be one long await: settle() only returns at its deadline while a tool
+-- runs a full-screen program such as lazygit. Poll in short slices instead,
+-- each far below the budget, and stop as soon as the pane is gone.
+local SAMPLE_POLL_MS = 10
+
 local function freshSample(cx, pane, sample, remaining, callback)
     cx.procs:list({ limit = 1 }):next(function(list, err, nextCx)
         if not nextCx then return end
@@ -165,11 +171,11 @@ local function freshSample(cx, pane, sample, remaining, callback)
             callback(list, nextCx)
             return
         end
-        if remaining == 0 then
+        if remaining == 0 or not nextCx.session:pane(pane) then
             callback(nil, nextCx)
             return
         end
-        nextCx.session:settle(pane, 100):next(function(_, settleError, settleCx)
+        nextCx.session:settle(pane, SAMPLE_POLL_MS):next(function(_, settleError, settleCx)
             if not settleCx or settleError then
                 callback(nil, settleCx)
                 return

@@ -29,6 +29,7 @@ CASES = [
     "source_close_keeps_tool",
     "reload_record_is_not_reclaimed",
     "unknown_process_is_not_managed",
+    "stale_process_sample_never_awaits_shell",
     "ambiguous_split_blocks_retry",
     "definite_split_failure_releases_reservation",
     "default_layout_preserves_unrelated_split",
@@ -72,10 +73,10 @@ def main():
             )
         return
     files = {
-        "tools": "plugin/lib/tools.luau",
-        "identity": "plugin/lib/tool_identity.luau",
-        "launch": "plugin/lib/lazygit_launch.luau",
-        "executables": "plugin/lib/executables.luau",
+        "tools": "lib/tools.luau",
+        "identity": "lib/tool_identity.luau",
+        "launch": "lib/lazygit_launch.luau",
+        "executables": "lib/executables.luau",
         "tests": "tests/tool_code.luau",
         "fixture": "tests/code_fixture.luau",
     }

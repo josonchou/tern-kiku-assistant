@@ -156,7 +156,7 @@ https://github.com/jesseduffield/lazygit/blob/17cb09fa7b08bc96d9f0e81b91f4720fc1
 
 - 中文显示名：**Kiku 助手**；英文项目名：**Kiku Assistant**；英文仓库名称：`tern-kiku-assistant`。
 - 保留稳定插件 ID `kiku`，不因显示名变更而改写 `plugin.kiku.*` 动作、安装标识或现有数据归属；本地目录与远端仓库的实际更名不在本轮执行范围内。
-- `plugin/plugin.toml` 已应用 `name = "Kiku 助手"`；稳定 ID 仍为 `kiku`，命令分组和使用说明同步采用新名称。
+- `plugin.toml` 已应用 `name = "Kiku 助手"`；稳定 ID 仍为 `kiku`，命令分组和使用说明同步采用新名称。
 
 ### 按功能判断依赖
 
@@ -169,7 +169,7 @@ https://github.com/jesseduffield/lazygit/blob/17cb09fa7b08bc96d9f0e81b91f4720fc1
 | lazygit 工具 | lazygit 及其运行环境中可用的 Git | 停用 lazygit 的启动，不因 lazygit 缺失而停用插件自身的 Git/worktree 功能 |
 | 临时终端 | Tern 在对应主机配置的 shell | 不依赖 Git、lazygit 或 `realpath`；shell 配置继续由 Tern 管理 |
 
-现有 worktree 调用使用 `plugin/window.luau` 的 Git／realpath helper；lazygit 通过 `plugin/lib/lazygit_launch.luau` 的私有 Git 执行桥使用已解析的 Git，真实进程验收见 [验证记录](verification.md)。系统 `realpath` 也纳入可手动指定路径的外部程序，不遗漏系统工具。
+现有 worktree 调用使用 `window.luau` 的 Git／realpath helper；lazygit 通过 `lib/lazygit_launch.luau` 的私有 Git 执行桥使用已解析的 Git，真实进程验收见 [验证记录](verification.md)。系统 `realpath` 也纳入可手动指定路径的外部程序，不遗漏系统工具。
 
 - 命令面板隐藏不可用的启动项；选择器中的依赖子动作遵循同样规则。快捷键或直接动作调用仍需保护，只说明缺少哪个程序、对应主机及配置方式，不执行被停用功能。
 - 停用启动能力不等于终止现有实例：本次运行期内身份仍已确认的工具，其聚焦、收起、结束与恢复不因可执行文件后来消失而被禁用，也不重新启动程序。重载后或身份代次未知的旧实例遵循上述安全模式。
@@ -217,7 +217,7 @@ https://github.com/jesseduffield/lazygit/blob/17cb09fa7b08bc96d9f0e81b91f4720fc1
 ### 单实例管理方案
 
 - **范围与索引**：注册表在当前窗口插件 VM 内；将创建 tab ID、启动目录和工具类型分别做长度前缀编码，不让含分隔符的路径造成键碰撞，不按标题、工具当前 cwd 或进程名扫描认领普通终端。主机与会话信息用于操作前验证。
-- **单一注册表**：`plugin/lib/tools.luau` 的 `tools` 按固定归属键映射实例，`byPane` 提供反向索引，`pending` 按完整归属键管理进行中的操作。旧的“host + session + source pane”复用与同源互斥浮窗规则已移除，不维护第二套来源归属。
+- **单一注册表**：`lib/tools.luau` 的 `tools` 按固定归属键映射实例，`byPane` 提供反向索引，`pending` 按完整归属键管理进行中的操作。旧的“host + session + source pane”复用与同源互斥浮窗规则已移除，不维护第二套来源归属。
 - **先占位，再异步创建**：捕获触发时的 tab／聚焦窗格／继承目录，在依赖检查、身份准备和创建之前占住归属键。连续触发同键不会重复创建；占位覆盖启动或复用布局恢复的整个异步过程。完成回调核对仍是同一操作代次，不能释放后来操作的占位。
 - **已有实例路径**：登记存在且 pane／主机／会话／进程身份仍可确认时，恢复已决定的默认布局并聚焦，不重新执行启动命令，不重置工具内部 cwd。工具被移到别的 tab 或被 `park` 不释放归属键。
 - **关闭与不确定状态**：正常返回 `nil` 且无新增候选时释放创建占位；异常且有候选时等待候选确认关闭；异常无候选时也保留不确定占位，提示用户原生检查后重载，不把一次枚举无新增视为回滚保证，也不安排无目标轮询。Restart、失败卡片或进程身份不明时不移动、结束或重跑。
@@ -230,7 +230,7 @@ https://github.com/jesseduffield/lazygit/blob/17cb09fa7b08bc96d9f0e81b91f4720fc1
 用户截图确认旧实现会把 `KIKU_TOOL_V1` 握手命令及输出留在新终端里；窗口 API 的 `cx:run` 就是“像键入一样”写入 PTY，没有静默选项。因此身份采集改到进程启动阶段，且不改变工具 pane 的原生终端类型。
 
 - **私有启动目录**：每次创建先申请 `<plugin data>/tool-start/<随机32位标记>/`，写入 `request.json`（版本、标记、真实启动目录），再以该私有目录作为 `layout:split` 的 `cwd`。它同时是本次启动的许可与归属关联，普通 pane 不会进入该根目录。
-- **宿主 spawn 钩子**：`plugin/host.luau` 在 daemon 侧注册 `tern.on("spawn", identity.spawn)`。只有 `spec.cwd` 精确等于上述根下合法标记目录、且 request 校验通过时才改写；其他 pane 原样返回。插件块不会触发该钩子，钩子内不做异步等待。
+- **宿主 spawn 钩子**：`host.luau` 在 daemon 侧注册 `tern.on("spawn", identity.spawn)`。只有 `spec.cwd` 精确等于上述根下合法标记目录、且 request 校验通过时才改写；其他 pane 原样返回。插件块不会触发该钩子，钩子内不做异步等待。
 - **保真 shell**：`Launch.command` 非空会让 pane 变成 agent 类型并改变程序／标题，因此不用它传递命令。钩子保留已解析的 `program` 与 `env`，把 `args` 换成一次性初始 shell（zsh `-f -c`、fish `--no-config -c`、bash/sh/dash/ksh `-c`）：在 exec 原 `program` 与原 `args` 前用 `noclobber` 静默写入 shell 的 `$$`，随后 `exec`，所以记录的 PID 就是最终交互 shell。默认 shell、登录参数和 Tern 的 shell integration 环境仍由宿主在钩子之后提供。此前用 `cx.run` 注入的 `printf` 全部移除，不做清屏或 ANSI 擦除。
 - **首代次语义**：`pid` 文件只允许创建一次；原生 Restart 会重新执行同一启动目录，但不会覆盖首代次 PID。窗口侧仍以进程采样核对 PID、父进程与启动代次，因此新 shell 一律判为身份不明，不接管、不结束、不重跑。
 - **失败与不支持**：request 缺失或校验失败时钩子不改写，终端按默认 shell 启动但没有身份记录，窗口超时后保留 pane 并提示不重复启动。默认 shell 不受支持时钩子写入 `error` 并让 pane 以 125 退出，窗口显示具体原因；不静默降级为无身份工具，也不删除用户文件。
@@ -247,7 +247,7 @@ https://github.com/jesseduffield/lazygit/blob/17cb09fa7b08bc96d9f0e81b91f4720fc1
 
 - 用户报告：打开的临时终端浮层停留一段时间后，`Ctrl+B → q` 与 `Ctrl+B → Shift+Q` 报“工具身份未确认／未识别当前窗格”。原生隔离复现显示 pane 仍存活、身份记录仍在，变的是焦点。
 - 原因：Tern 在窗口失焦或点击底层 pane 后，把该 PiP 从 `mode=focus` 降为 `mode=glance`（缩小、倾斜）并把聚焦交回 owner pane。旧实现只按 `byPane[cx.session:focused()]` 取目标，因此 glance 状态必然查不到工具。观察器、进程代次校验和 `park` 判定都没有问题。
-- 修复：`plugin/lib/tools.luau` 的 `leaderTool` 先按聚焦 pane 命中；未命中且当前标签页存在本插件登记、`floating`、未 `parked`、未 `exited` 的临时终端时，唯一候选即作为 leader 目标。多个候选不猜测，提示先点击目标浮层；零候选保留原提示。
+- 修复：`lib/tools.luau` 的 `leaderTool` 先按聚焦 pane 命中；未命中且当前标签页存在本插件登记、`floating`、未 `parked`、未 `exited` 的临时终端时，唯一候选即作为 leader 目标。多个候选不猜测，提示先点击目标浮层；零候选保留原提示。
 - 边界不变：候选只在当前 host／session／标签页内，其他标签页的浮层不受影响；`q` 仍是 `park` 保活，`Shift+Q` 仍先弹确认；进程身份校验、异步上下文核对和“不接管未知实例”的规则全部沿用。
 
 ### 已确认的补充边界
@@ -285,18 +285,30 @@ https://github.com/jesseduffield/lazygit/blob/17cb09fa7b08bc96d9f0e81b91f4720fc1
 
 用户要求 lazygit 与临时终端使用同一种交互，并美化激活 block。本次决定：
 
-- lazygit 不再以右侧 tiled block 打开，而是和临时终端一样在当前标签页的右下角创建原生 PiP；创建、复用、收起、结束和恢复共用 `plugin/lib/tools.luau` 的同一套路径。复用或再次打开时，被用户拖动、缩放或停靠过的工具都会恢复为右下角 PiP 并聚焦，不重启程序。
+- lazygit 不再以右侧 tiled block 打开，而是和临时终端一样在当前标签页的右下角创建原生 PiP；创建、复用、收起、结束和恢复共用 `lib/tools.luau` 的同一套路径。复用或再次打开时，被用户拖动、缩放或停靠过的工具都会恢复为右下角 PiP 并聚焦，不重启程序。
 - `Ctrl+B → q`、`Ctrl+B → Shift+Q` 与“Kiku：恢复收起的工具”现在同时管理 lazygit 和临时终端；普通 pane 仍不会被这些动作关闭。结束确认文案会区分“结束此 lazygit”和“结束此临时终端”。
 - lazygit 在创建 pane 前先用已解析的 Git 执行 `-C <启动目录> rev-parse --is-inside-work-tree`；不是 Git 仓库、检查超时或来源在检查期间变化时直接提示并停止，不创建 pane、不启动 lazygit。临时终端不受此限制。
 - 同一固定归属（创建时 tab + 启动目录 + 工具类型）仍各保留一个实例；两类工具可以在同一标签页共存，`q` 在存在多个可见浮层且无法从焦点确定目标时仍拒绝猜测。
-- 激活 block 由 `plugin/lib/style.luau` 通过 `tern.css("active-block", …)` 安装全局样式：使用主题 `--accent` 色的 2px 圆角描边，并移除 Tern 原先在激活 block 顶部绘制的 1px 渐变线。tiled 与 PiP 聚焦时也显示描边；float／studio 布局按 4px 内边距对齐卡片。
+- 激活 block 由 `lib/style.luau` 通过 `tern.css("active-block", …)` 安装全局样式：使用主题 `--accent` 色的 2px 圆角描边，并移除 Tern 原先在激活 block 顶部绘制的 1px 渐变线。tiled 与 PiP 聚焦时也显示描边；float／studio 布局按 4px 内边距对齐卡片。
 - Tern 0.9.5 的窗口插件 API 不暴露 PiP 的 `expand`／`resize`，场景脚本里的 `pip expand` 也不能通过 `cx:action` 或 `cx.actions:run` 调用。因此插件只能以 `focus` 模式打开（原生最大标准尺寸），自动展开到整块仍需要用户双击或使用原生交互；本轮不采用固定视口尺寸的 CSS 覆盖来伪造“最大化”，避免遮挡其他 pane 和破坏 PiP 拖动／停靠。
 - 仍仅支持本机 macOS/Linux，依赖解析、身份校验、安全模式、worktree 流程和用户快捷键覆盖规则不变。
 
-## 源码热加载与 Git 目录边界（2026-10-22）
+## 源码热加载与 Git 目录边界（2026-10-22，历史布局决定）
 
-- 用户要求保留源码热加载和当前旧 lazygit 进程。运行包整体位于仓库的 `plugin/` 子目录；Tern 直接链接该目录，不复制固定文件清单，不在仓库根保留第二份运行入口或配置。
-- 隔离原生复现显示，Tern 0.9.5 会因已链接包目录内的 `.git` 元数据变化重载插件；当包根等于源码仓库根时，打开 lazygit 即可能中断创建后聚焦，并清空运行期工具登记。该问题不通过放宽身份校验或重新认领历史实例修复。
-- `plugin/` 包含清单、窗口／宿主入口、`lib/` 与 `config.json`。新增运行文件放在该目录内，仍由 Tern 热加载；仓库根的 `.git`、测试和文档位于包外，不触发运行包重载。相对可执行文件路径仍按插件包目录解析。
-- 真正修改插件源码仍会重载，因此旧工具继续遵循安全模式，由 Tern 原生管理；不自动关闭、迁移或重新认领。关闭并重新打开客户端也不授予旧工具管理权。
+- 当时建议把运行包放在仓库的 `plugin/` 子目录，以避免 `.git` 元数据位于包内；此子包方案已被用户选择的仓库根独立插件布局取代，不是 Tern SDK 强制的包结构。
+- 当时的隔离原生复现显示，Tern 0.9.5 会因已链接包目录内的 `.git` 元数据变化重载插件。当前包根就是仓库根，故该风险仍存在，可能清空运行期工具登记；本次布局回迁不声称解决此问题，也不放宽身份校验或重新认领历史实例。
+- 旧实例继续遵循安全模式，由 Tern 原生管理；不自动关闭、迁移、重启或重新认领。相对可执行文件路径仍按包根解析。
+- 2026-10-22 用户复审官方示例后确认改用仓库根布局（`plugin.toml` 直接在仓库根，与官方独立分发示例一致）；`plugin/` 子包方案仅作历史记录，不再生效。官方 SDK 示例 `jsonx`、`canvas`、`longrun` 位于 SDK 仓库子目录，说明子包同样合规，因此两种布局的选择属于项目偏好，不是 SDK 强制。
+- 布局回迁后已知风险仍存在：在本仓库自身打开 lazygit 时，其 Git 元数据刷新可能触发插件重载；该场景不在当前原生回归的覆盖范围内，故不宣称已修复。
+
+## 窗口等待预算修复（2026-10-22）
+
+用户按 `Ctrl+B → q` 时出现 “Plugin Kiku 助手: await failed / tern: await exceeded 50 ms”。窗口侧每次调用只有 50 ms 预算，且 await 沿用同一截止时间；工具窗格里运行 lazygit 这类全屏程序时不产生 shell 提示符标记，`session:settle(pane, ms)` 只能等到超时才返回，因此 100 ms 的采样等待和 500 ms 的启动等待必然超预算。日志确认失败 hook 为 `await`，并触发“禁用直到重载”。
+
+修正方式：不再使用一次长等待，改为每次 10 ms 的短结算切片轮询。
+
+- `lib/tool_identity.luau` 的 `freshSample` 以 10 ms 切片等待更新的进程采样，仍要求采样晚于校验开始，绝不使用旧采样放行；窗格消失或切片用尽时保守拒绝。
+- `lib/tools.luau` 的启动握手同样以 10 ms 切片轮询，替代原来的 `settle(pane, 100)`；lazygit 启动后的呈现等待改为 50 个 10 ms 切片（≈500 ms），取代 `settle(pane, 500)`。
+- 身份校验、安全模式、焦点条件与失败提示不变；超时仍拒绝执行收起或结束，不接管未知实例。
+- 不使用 `tern.timer` 链：隔离实验显示无头 `serve` 只在窗口“做事”时才服务插件定时器，沿用它会让无头重启场景卡住。
 

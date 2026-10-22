@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the production Tern spawn filter against real shells, without starting Tern.
 
-The Luau harness loads plugin/lib/tool_identity.luau with only the host boundary stubbed
+The Luau harness loads lib/tool_identity.luau with only the host boundary stubbed
 (plugin data, fs, json pair). Each shell then executes the exact command line the
 production filter produced, so quoting, PID continuity and silence are real.
 """
@@ -91,7 +91,7 @@ def run_shell(root, luau, name):
     final = (f"printf '%s\\n' {pid_expression} > {shlex.quote(str(pid_two))}; "
              f"printf '%s' {name_expression} > {shlex.quote(str(name_file))}")
     script = (HARNESS
-              .replace("@@IDENTITY@@", lua((ROOT / "plugin" / "lib" / "tool_identity.luau").read_text(encoding="utf-8")))
+              .replace("@@IDENTITY@@", lua((ROOT / "lib" / "tool_identity.luau").read_text(encoding="utf-8")))
               .replace("@@DATA@@", lua(str(root)))
               .replace("@@TOKEN@@", lua(TOKEN))
               .replace("@@PROGRAM@@", lua(program_path))

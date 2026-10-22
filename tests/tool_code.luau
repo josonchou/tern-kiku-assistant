@@ -169,6 +169,7 @@ return function(tools, tern, state, cx, fresh, selectedCase)
         eq(after[2].floating,true)
         eq(cx.session:layout(11).floats[1].over,1)
         eq(cx.session:layout(11).floats[2].over,1)
+        state.tick()
         state.commands.hide_tool.run(cx)
         eq(cx.session:pane(after[2].pane).parked,true)
         state.pickHandler=chooseFirst
@@ -337,6 +338,28 @@ return function(tools, tern, state, cx, fresh, selectedCase)
         state.commands.open_terminal.run(cx)
         eq(#toolPanes(),1)
 
+    elseif selectedCase=="stale_process_sample_never_awaits_shell" then
+        setup()
+        local scratch=openScratch()[1]
+        eq(cx.session:focused(),scratch.pane)
+        eq(state.settleMaxMs <= 10,true)
+        -- The process sampler stops producing newer samples, the state a busy
+        -- full-screen tool can create. Identity must not be assumed from the
+        -- old sample, and no single wait may approach the 50 ms window budget.
+        state.frozenSample=state.samples
+        state.settleMaxMs=0
+        state.commands.hide_tool.run(cx)
+        eq(state.settleCalls>0,true)
+        eq(state.settleMaxMs<=10,true)
+        eq(cx.session:pane(scratch.pane).parked,false)
+        eq(#state.toasts,1)
+        eq(state.toasts[1].title,"工具身份未确认")
+        eq(state.toasts[1].detail,"保留当前窗格；未执行收起操作。")
+        state.frozenSample=nil
+        state.commands.hide_tool.run(cx)
+        eq(state.settleMaxMs<=10,true)
+        eq(cx.session:pane(scratch.pane).parked,true)
+
     elseif selectedCase=="ambiguous_split_blocks_retry" then
         setup()
         state.splitMode="throw_after_create"
@@ -430,6 +453,7 @@ return function(tools, tern, state, cx, fresh, selectedCase)
         local root=cx.session:layout(11).root
         eq(root[1].pane,1)
         eq(root[2].pane,2)
+        state.tick()
         eq(cx.session:pane(lazygit).floating,true)
         local float=cx.session:layout(11).floats[1]
         eq(float.pane,lazygit)
@@ -472,6 +496,7 @@ return function(tools, tern, state, cx, fresh, selectedCase)
         state.focus=1
         state.commands.open_lazygit.run(cx)
         local lazygit=toolPanes()[2].pane
+        state.tick()
         cx.layout:float(lazygit,2,"tl")
         state.focus=scratch
         state.deferParentFind=true
@@ -512,6 +537,7 @@ return function(tools, tern, state, cx, fresh, selectedCase)
         state.focus=1
         state.commands.open_lazygit.run(cx)
         local lazygit=toolPanes()[2].pane
+        state.tick()
         cx.layout:float(lazygit,2,"tl")
         state.focus=scratch
         state.inventoryIncomplete=true
@@ -551,6 +577,7 @@ return function(tools, tern, state, cx, fresh, selectedCase)
         eq(#toolPanes(),2)
         eq(lazygit.cwd,"/work/project")
         eq(lazygit.floating,true)
+        state.tick()
         eq(cx.session:focused(),lazygit.pane)
         state.focus=1
         state.commands.open_lazygit.run(cx)
